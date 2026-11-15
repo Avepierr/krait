@@ -334,16 +334,24 @@ function appendDelta(d) {
   setMsgMarkdown(currentAssistant, cleanStream(t.dataset.raw));
 }
 
-/** Hide raw tool-call JSON from the live view: show a small chip instead. */
+/** Hide raw tool-call JSON from the live view: show a small named chip instead. */
+function toolChip(raw) {
+  const nm = /"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"/.exec(raw);
+  if (!nm) return '\u2699 using tool...';
+  const what = { Read: 'Reading', Write: 'Writing', Edit: 'Editing', Bash: 'Running', Glob: 'Scanning', Grep: 'Searching', WebFetch: 'Fetching' }[nm[1]];
+  const p = /"path"\s*:\s*"([^"]{1,60})"/.exec(raw) || /"command"\s*:\s*"([^"]{1,60})"/.exec(raw);
+  return '\u2699 ' + what + (p ? ' ' + p[1] : '') + '...';
+}
+
 function cleanStream(raw) {
   let s = String(raw);
   // complete fenced tool blocks
-  s = s.replace(/```tool\s*\n?[\s\S]*?```/g, '\n\u2699 using tool...\n');
+  s = s.replace(/```tool\s*\n?([\s\S]*?)```/g, (_, inner) => '\n' + toolChip(inner) + '\n');
   // trailing unclosed tool block (still streaming)
   const idx = s.lastIndexOf('```tool');
-  if (idx >= 0) s = s.slice(0, idx) + '\n\u2699 using tool...\n';
+  if (idx >= 0) s = s.slice(0, idx) + '\n' + toolChip(s.slice(idx)) + '\n';
   // inline tool JSON the model sometimes prints without a fence
-  s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, '\u2699 using tool...');
+  s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, m => toolChip(m));
   s = s.replace(/^\s*tool\s*$/mg, '');
   return s;
 }
@@ -358,15 +366,17 @@ function onThinkingDelta(d) {
   if (!d) return;
   thoughtText += d;
   if (!thoughtEl) {
-    // first thinking chunk → create the block above the answer
+    // first thinking chunk → create the block inside the krait bubble, above the answer
     thoughtEl = document.createElement('div');
     thoughtEl.className = 'thought open';
     thoughtEl.innerHTML =
       '<button class="th-head"><span class="th-ic">&#9733;</span><span class="th-label">Thinking</span>' +
       '<span class="th-time">0s</span><span class="th-caret">&#9662;</span></button>' +
       '<div class="th-body"></div>';
-    thoughtEl.querySelector('.th-head').onclick = () => thoughtEl.classList.toggle('open');
-    $('messages').appendChild(thoughtEl);
+    thoughtEl.querySelector('.th-head').onclick =
+      e => e.currentTarget.closest('.thought').classList.toggle('open');
+    const host = currentAssistant && currentAssistant.querySelector('.bubble');
+    (host || $('messages')).prepend(thoughtEl);
     thoughtTimer = setInterval(() => {
       const t = thoughtEl && thoughtEl.querySelector('.th-time');
       if (t) t.textContent = Math.round((Date.now() - K.thinkStart) / 1000) + 's';
@@ -382,7 +392,7 @@ function onThinkingDelta(d) {
   scrollDown();
 }
 
-/** First answer chunk arrived → stop the timer, set the final label, collapse. */
+/** First answer chunk arrived → stop the timer, set the final label. Keep it open so the user can read the thoughts. */
 function finishThought() {
   if (!thoughtEl) return;
   clearInterval(thoughtTimer);
@@ -394,7 +404,6 @@ function finishThought() {
     : secs + 's');
   const time = thoughtEl.querySelector('.th-time');
   if (time) time.textContent = '';
-  thoughtEl.classList.remove('open');
   thoughtEl = null;
   K.thinkStart = 0;
 }
@@ -407,8 +416,22 @@ function resetThought() {
   K.thinkStart = 0;
 }
 
-function addArtifact(bubbleEl, path) {
-  const name = String(path).split(/[\\/]/).pop();
+/** Final answer cleanup: strip tool-call debris and unescape literal \n in code blocks. */
+function sanitizeFinal(text) {
+  let s = String(text);
+  s = s.replace(/```tool\s*\n?[\s\S]*?```/g, '');
+  s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, '');
+  s = s.replace(/^\s*tool\s*$/mg, '');
+  // models dump file content with literal backslash-n — turn it into real lines
+  s = s.replace(/```([\w+#]*)\n([\s\S]*?)```/g, (m0, lang, code) => {
+    if (!code.includes('\\n')) return m0;
+    const fixed = code.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t');
+    return '```' + lang + '\n' + fixed + '```';
+  });
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function addArtifact(bubbleEl, path) {  const name = String(path).split(/[\\/]/).pop();
   const card = document.createElement('div');
   card.className = 'artifact';
   card.innerHTML =
@@ -513,7 +536,7 @@ async function send() {
     if (res.error) {
       currentAssistant.querySelector('.text').textContent = 'Error: ' + res.error;
     } else {
-      setMsgMarkdown(currentAssistant, res.text || '(empty reply)');
+      setMsgMarkdown(currentAssistant, sanitizeFinal(res.text) || '(empty reply)');
       K.messages.push({ role: 'assistant', content: res.text || '' });
       if (note && res.usage) {
         note.textContent = '+' + res.usage.total + ' tok' + (res.usage.estimated ? ' (est.)' : '');

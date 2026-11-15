@@ -110,9 +110,14 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       systemInstruction: { parts: [{ text: sys }] },
       contents: clean.map(m => buildMessage('gemini', m)),
     };
-    // Gemini 2.5+ can expose its thoughts
+    // Gemini 2.5+ can expose its thoughts; budget scales with effort
     if (/2\.5|3\b/.test(model)) {
-      body.generationConfig = { thinkingConfig: { includeThoughts: true } };
+      body.generationConfig = {
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingBudget: THINK_BUDGET[(opts && opts.effort) || 'medium'] || 2048,
+        },
+      };
     }
   } else if (ns === 'anthropic') {
     // thinking needs budget_tokens >= 1024 and max_tokens > budget
@@ -138,10 +143,12 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     url = base + '/chat/completions';
     headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key };
     if (ns === 'openrouter') headers['HTTP-Referer'] = 'https://krait.local';
+    // high effort → let the model think AND answer with more tokens
+    const maxTok = ['high', 'max', 'ultra'].includes((opts && opts.effort) || '') ? 8192 : 4096;
     body = {
       model,
       stream: true,
-      max_tokens: 4096,
+      max_tokens: maxTok,
       stream_options: { include_usage: true },
       messages: [{ role: 'system', content: sys }, ...clean.map(m => buildMessage(ns, m))],
     };

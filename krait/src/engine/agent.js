@@ -14,10 +14,71 @@
  */
 
 const { ToolSet } = require('./tools');
+const fs = require('fs');
+const path = require('path');
 
 const TOOL_BLOCK_RE = /```tool\s*\n?([\s\S]*?)```/g;
 const MAX_ROUNDS = 6;
 const READ_ONLY = new Set(['Read', 'Glob', 'Grep', 'WebFetch']);
+
+// User asked to create/build something?
+const CREATE_RE = /\b(build|create|make|generate|write|code)\b/i;
+const LANG_EXT = {
+  html: 'html', js: 'js', javascript: 'js', jsx: 'jsx', ts: 'ts', css: 'css',
+  python: 'py', py: 'py', csv: 'csv', json: 'json', md: 'markdown', txt: 'text',
+  bash: 'sh', sh: 'sh',
+};
+const DEFAULT_NAME = {
+  html: 'app.html', js: 'app.js', css: 'style.css', py: 'script.py',
+  csv: 'data.csv', json: 'data.json', markdown: 'doc.md', text: 'notes.txt', sh: 'run.sh',
+};
+
+/**
+ * The model sometimes ignores Write and dumps the whole file as a ``` code block.
+ * If the user asked to create something, save the dump as a REAL file so the
+ * artifact card appears, and replace the dump in the chat with a short note.
+ * Returns { text, saved: [paths] } or null if there was nothing to save.
+ */
+async function autoSaveCodeDumps({ text, toolset, sendTool, askPermission, baseDir }) {
+  const re = /```([A-Za-z0-9+#]*)\s*\n([\s\S]*?)```/g;
+  let m;
+  const blocks = [];
+  while ((m = re.exec(text)) !== null) {
+    const lang = (m[1] || '').toLowerCase();
+    const code = m[2];
+    if (lang === 'tool' || lang === '') continue; // tool blocks / plain fences: skip
+    if (code.trim().split('\n').length < 4) continue; // tiny snippets stay in chat
+    blocks.push({ lang, code, index: m.index, end: re.lastIndex, pre: text.slice(Math.max(0, m.index - 220), m.index) });
+  }
+  if (!blocks.length) return null;
+
+  const saved = [];
+  let out = text;
+  for (let n = blocks.length - 1; n >= 0; n--) {
+    const b = blocks[n];
+    // filename: prefer one the model mentioned near the block (e.g. "save as game.html")
+    const fm = /([\w.-]+\.(?:html?|js|jsx|ts|css|py|csv|json|md|txt|sh))\b/i.exec(b.pre);
+    let name = fm ? fm[1] : (DEFAULT_NAME[LANG_EXT[b.lang] || b.lang] || null);
+    if (!name) continue;
+    let pathOut = name;
+    try { pathOut = path.isAbsolute(name) ? name : path.join(baseDir || '.', name); } catch {}
+    if (askPermission) {
+      const ok = await askPermission({ tool: 'Write', detail: 'create/overwrite ' + name + ' (from pasted code block)' });
+      if (!ok) continue;
+    }
+    if (sendTool) sendTool({ name: 'Write', input: { path: name }, status: 'running' });
+    try {
+      fs.mkdirSync(path.dirname(pathOut), { recursive: true });
+      fs.writeFileSync(pathOut, b.code);
+      if (sendTool) sendTool({ name: 'Write', input: { path: name }, status: 'done', summary: 'written ' + name });
+      saved.push(name);
+      // replace the raw dump with a clean note
+      const note = 'Created **' + name + '** — download or open it from the card below.\n';
+      out = out.slice(0, b.index) + note + out.slice(b.end);
+    } catch {}
+  }
+  return saved.length ? { text: out.replace(/\n{3,}/g, '\n\n'), saved } : null;
+}
 
 function toolPrompt(enabled) {
   if (!enabled || !enabled.length) return '';
@@ -28,6 +89,9 @@ function toolPrompt(enabled) {
     '```tool\n{"name": "ToolName", "input": {"arg": "value"}}\n```\n' +
     'RULES: One tool call per fenced block. NEVER describe a tool call in words - always emit the block. ' +
     'Never invent results. After you receive TOOL RESULTS, continue.\n' +
+    'IMPORTANT - CREATING THINGS: when the user asks you to build, create, make, or generate anything ' +
+    '(an app, game, page, spreadsheet, file), you MUST create the real file with the Write tool. ' +
+    'NEVER dump the full file content as a code block in chat - that is a failure. Write the file, keep your chat answer short.\n' +
     'Available tools:\n';
   for (const t of all) {
     s += '- ' + t.name + ': ' + t.description + '. Args: ' +
@@ -137,6 +201,7 @@ async function runAgent(deps) {
 
   let finalText = '';
   let usage = null;
+  let usedWrite = false;
   const accUsage = u => {
     if (!u) return;
     if (!usage) usage = { input: 0, output: 0, total: 0 };
@@ -155,7 +220,6 @@ async function runAgent(deps) {
       finalText += res.text;
       break;
     }
-
     // show the cleaned text (without the raw tool JSON)
     const visible = stripToolBlocks(res.text);
     if (visible) finalText += visible + '\n\n';
@@ -189,6 +253,7 @@ async function runAgent(deps) {
 
       if (sendTool) sendTool({ name: call.name, input: call.input, status: 'running' });
       const out = await toolset.execute(call.name, call.input);
+      if (call.name === 'Write') usedWrite = true;
       if (sendTool) sendTool({ name: call.name, input: call.input, status: 'done', summary: summarize(out) });
       results.push('Tool ' + call.name + ' result:\n' + JSON.stringify(out).slice(0, 6000));
     }
@@ -198,6 +263,20 @@ async function runAgent(deps) {
       content: 'TOOL RESULTS:\n' + results.join('\n\n') +
         '\n\nContinue using tools if needed. When done, answer the user directly (no tool block).',
     });
+  }
+
+  // Fallback: model dumped the file as a code block instead of using Write.
+  // If the user asked to CREATE something, save it as a real file anyway.
+  if (!usedWrite && mode !== 'plan' && enabled.includes('Write')) {
+    const lastUser = [...convo].reverse().find(m => m.role === 'user');
+    const ask = lastUser ? String(lastUser.content) : '';
+    if (CREATE_RE.test(ask)) {
+      const r = await autoSaveCodeDumps({
+        text: finalText, toolset, sendTool, askPermission,
+        baseDir,
+      });
+      if (r) finalText = r.text;
+    }
   }
 
   if (!finalText.trim()) finalText = '(no answer)';
