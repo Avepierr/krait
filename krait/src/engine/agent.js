@@ -218,6 +218,17 @@ async function runAgent(deps) {
     const calls = parseToolBlocks(res.text);
     if (!calls.length) {
       finalText += res.text;
+      if (res.truncated && round < MAX_ROUNDS - 1) {
+        // the reply hit the output limit mid-file — make the model CONTINUE from where it stopped
+        convo.push({ role: 'assistant', content: res.text });
+        convo.push({
+          role: 'user',
+          content: 'Your reply was CUT OFF by the output token limit. Continue EXACTLY where you stopped. ' +
+            'Do not repeat anything, do not say "continuing" - just output the missing rest. ' +
+            'If you were writing a file with the Write tool, emit the complete tool block for it now.',
+        });
+        continue;
+      }
       break;
     }
     // show the cleaned text (without the raw tool JSON)

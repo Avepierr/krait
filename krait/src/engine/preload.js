@@ -34,6 +34,13 @@ contextBridge.exposeInMainWorld('krait', {
   mcpSave: cfg => ipcRenderer.invoke('krait:mcp-save', cfg),
   mcpTest: server => ipcRenderer.invoke('krait:mcp-test', server),
 
+  providersGet: () => ipcRenderer.invoke('krait:providers-get'),
+  providersAdd: (id, cfg) => ipcRenderer.invoke('krait:providers-add', id, cfg),
+  providersDelete: id => ipcRenderer.invoke('krait:providers-delete', id),
+
+  onAskPermission: cb => ipcRenderer.on('krait:ask-permission', (_, req) => cb(req)),
+  permissionResponse: (id, choice) => ipcRenderer.invoke('krait:permission-response', id, choice),
+
   downloadFile: p => ipcRenderer.invoke('krait:download-file', p),
   openFile: p => ipcRenderer.invoke('krait:open-file', p),
 

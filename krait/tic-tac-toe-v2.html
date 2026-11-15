@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tic Tac Toe</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #eaeaea;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 10px; font-weight: 700; letter-spacing: 2px; }
+    .subtitle { color: #888; margin-bottom: 24px; font-size: 0.9rem; }
+    .scoreboard {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .score-item {
+      background: rgba(255,255,255,0.05);
+      padding: 12px 24px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      text-align: center;
+      min-width: 100px;
+    }
+    .score-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px; }
+    .score-value { font-size: 1.5rem; font-weight: 700; }
+    .score-x { color: #ff4757; }
+    .score-o { color: #2ed573; }
+    .score-draw { color: #ffa502; }
+    .turn-indicator {
+      margin-bottom: 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      height: 28px;
+    }
+    .turn-x { color: #ff4757; }
+    .turn-o { color: #2ed573; }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(3, 100px);
+      grid-template-rows: repeat(3, 100px);
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 380px) {
+      .board { grid-template-columns: repeat(3, 80px); grid-template-rows: repeat(3, 80px); }
+    }
+    .cell {
+      background: rgba(255,255,255,0.03);
+      border: 2px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+    .cell:hover:not(.taken) {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.2);
+      transform: scale(1.02);
+    }
+    .cell.taken { cursor: default; }
+    .cell.x { color: #ff4757; }
+    .cell.o { color: #2ed573; }
+    .cell.win {
+      background: rgba(46, 213, 115, 0.15);
+      border-color: #2ed573;
+      box-shadow: 0 0 20px rgba(46, 213, 115, 0.4);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .cell.win.x { background: rgba(255, 71, 87, 0.15); border-color: #ff4757; box-shadow: 0 0 20px rgba(255, 71, 87, 0.4); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    .controls { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    button {
+      padding: 12px 28px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .btn-new { background: linear-gradient(135deg, #2ed573, #1dd1a1); color: #0d1b15; }
+    .btn-new:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(46, 213, 115, 0.4); }
+    .btn-reset { background: rgba(255,255,255,0.05); color: #eaeaea; border: 1px solid rgba(255,255,255,0.1); }
+    .btn-reset:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal.show { display: flex; }
+    .modal-content {
+      background: #1a1a2e;
+      padding: 40px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.1);
+      text-align: center;
+      max-width: 90vw;
+    }
+    .modal-title { font-size: 2rem; margin-bottom: 12px; }
+    .modal-title.x-win { color: #ff4757; }
+    .modal-title.o-win { color: #2ed573; }
+    .modal-title.draw { color: #ffa502; }
+    .modal-btn { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>TIC TAC TOE</h1>
+  <p class="subtitle">Player X vs Player O</p>
+  
+  <div class="scoreboard">
+    <div class="score-item"><div class="score-label">X Wins</div><div class="score-value score-x" id="scoreX">0</div></div>
+    <div class="score-item"><div class="score-label">Draws</div><div class="score-value score-draw" id="scoreDraw">0</div></div>
+    <div class="score-item"><div class="score-label">O Wins</div><div class="score-value score-o" id="scoreO">0</div></div>
+  </div>
+  
+  <div class="turn-indicator" id="turnIndicator"><span class="turn-x">Player X</span>'s turn</div>
+  
+  <div class="board" id="board" role="grid" aria-label="Tic Tac Toe board"></div>
+  
+  <div class="controls">
+    <button class="btn-new" id="btnNew">New Game</button>
+    <button class="btn-reset" id="btnReset">Reset Scores</button>
+  </div>
+  
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-content">
+      <div class="modal-title" id="modalTitle">Game Over</div>
+      <button class="btn-new modal-btn" id="btnModalNew">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    const WIN_COMBOS = [
+      [0,1,2], [3,4,5], [6,7,8],
+      [0,3,6], [1,4,7], [2,5,8],
+      [0,4,8], [2,4,6]
+    ];
+    
+    let board = Array(9).fill(null);
+    let currentPlayer = 'X';
+    let gameActive = true;
+    let scores = { X: 0, O: 0, draw: 0 };
+    
+    const boardEl = document.getElementById('board');
+    const turnEl = document.getElementById('turnIndicator');
+    const scoreXEl = document.getElementById('scoreX');
+    const scoreOEl = document.getElementById('scoreO');
+    const scoreDrawEl = document.getElementById('scoreDraw');
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modalTitle');
+    
+    function createBoard() {
+      boardEl.innerHTML = '';
+      board.forEach((_, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.index = i;
+        cell.setAttribute('role', 'button');
+        cell.setAttribute('tabindex', '0');
+        cell.setAttribute('aria-label', `Cell ${i + 1}`);
+        cell.addEventListener('click', () => handleMove(i));
+        cell.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMove(i); } });
+        boardEl.appendChild(cell);
+      });
+    }
+    
+    function updateTurnDisplay() {
+      turnEl.innerHTML = `<span class="turn-${currentPlayer.toLowerCase()}">Player ${currentPlayer}</span>'s turn`;
+    }
+    
+    function updateScores() {
+      scoreXEl.textContent = scores.X;
+      scoreOEl.textContent = scores.O;
+      scoreDrawEl.textContent = scores.draw;
+    }
+    
+    function handleMove(index) {
+      if (!gameActive || board[index]) return;
+      
+      board[index] = currentPlayer;
+      const cell = boardEl.children[index];
+      cell.textContent = currentPlayer;
+      cell.classList.add(currentPlayer.toLowerCase(), 'taken');
+      
+      const winCombo = checkWin();
+      if (winCombo) {
+        endGame('win', winCombo);
+      } else if (board.every(c => c)) {
+        endGame('draw');
+      } else {
+        currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+        updateTurnDisplay();
+      }
+    }
+    
+    function checkWin() {
+      return WIN_COMBOS.find(combo => 
+        combo.every(i => board[i] === currentPlayer)
+      );
+    }
+    
+    function endGame(result, winCombo = null) {
+      gameActive = false;
+      
+      if (result === 'win') {
+        scores[currentPlayer]++;
+        winCombo.forEach(i => {
+          boardEl.children[i].classList.add('win', currentPlayer.toLowerCase());
+        });
+        modalTitle.textContent = `Player ${currentPlayer} Wins!`;
+        modalTitle.className = `modal-title ${currentPlayer.toLowerCase()}-win`;
+      } else {
+        scores.draw++;
+        modalTitle.textContent = "It's a Draw!";
+        modalTitle.className = 'modal-title draw';
+      }
+      
+      updateScores();
+      setTimeout(() => modal.classList.add('show'), 500);
+    }
+    
+    function newGame() {
+      board = Array(9).fill(null);
+      currentPlayer = 'X';
+      gameActive = true;
+      modal.classList.remove('show');
+      createBoard();
+      updateTurnDisplay();
+    }
+    
+    function resetScores() {
+      scores = { X: 0, O: 0, draw: 0 };
+      updateScores();
+      newGame();
+    }
+    
+    document.getElementById('btnNew').addEventListener('click', newGame);
+    document.getElementById('btnReset').addEventListener('click', resetScores);
+    document.getElementById('btnModalNew').addEventListener('click', newGame);
+    
+    createBoard();
+    updateTurnDisplay();
+    updateScores();
+  </script>
+</body>
+</html>

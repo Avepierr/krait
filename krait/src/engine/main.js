@@ -126,9 +126,29 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
   }
 });
 
-/** Native permission popup for dangerous tools. */
+/** Polished in-window permission popup (falls back to the native dialog). */
 async function askViaDialog(req) {
   if (!win) return false;
+  try {
+    if (!win.webContents.isDestroyed()) {
+      const id = 'ask-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+      const choice = await new Promise(resolve => {
+        pendingAsk = { id, resolve };
+        win.webContents.send('krait:ask-permission', {
+          id, tool: req.tool, detail: req.detail || '',
+        });
+        // if the renderer dies / never answers, don't hang forever
+        setTimeout(() => {
+          if (pendingAsk && pendingAsk.id === id) {
+            pendingAsk = null;
+            resolve('timeout');
+          }
+        }, 120000);
+      });
+      if (choice !== 'timeout') return choice === 'allow';
+    }
+  } catch {}
+  // fallback: native dialog
   const r = await dialog.showMessageBox(win, {
     type: 'question',
     buttons: ['Allow', 'Deny'],
@@ -286,6 +306,42 @@ ipcMain.handle('krait:maximize', () => {
   if (win.isMaximized()) win.unmaximize(); else win.maximize();
 });
 ipcMain.handle('krait:close', () => win && win.close());
+
+// ─── Custom providers (your own name + base URL) ───
+function readCustomProviders() {
+  try { return JSON.parse(require('fs').readFileSync(path.join(DATA_DIR, 'providers.json'), 'utf8')) || {}; } catch { return {}; }
+}
+function writeCustomProviders(p) {
+  require('fs').mkdirSync(DATA_DIR, { recursive: true });
+  require('fs').writeFileSync(path.join(DATA_DIR, 'providers.json'), JSON.stringify(p, null, 2));
+}
+ipcMain.handle('krait:providers-get', () => readCustomProviders());
+ipcMain.handle('krait:providers-add', (_, id, cfg) => {
+  const p = readCustomProviders();
+  p[String(id).toLowerCase().trim()] = { name: cfg.name || id, baseUrl: cfg.baseUrl, models: cfg.models || [] };
+  writeCustomProviders(p);
+  return true;
+});
+ipcMain.handle('krait:providers-delete', (_, id) => {
+  const p = readCustomProviders();
+  delete p[id];
+  writeCustomProviders(p);
+  return true;
+});
+
+// ─── Permission asks (polished in-window modal) ───
+let pendingAsk = null; // { id, resolve }
+ipcMain.handle('krait:permission-response', (_, id, choice) => {
+  if (pendingAsk && pendingAsk.id === id) {
+    pendingAsk.resolve(choice);
+    pendingAsk = null;
+  }
+  return true;
+});
+ipcMain.handle('krait:ask-always', () => {
+  // ask the renderer which tools are always-allowed (informational only)
+  return true;
+});
 
 app.on('window-all-closed', () => {
   app.quit();

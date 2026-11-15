@@ -181,6 +181,8 @@ async function init() {
 
   // keys + model list
   $('key-form').onsubmit = saveKeys;
+  const cpAdd = $('cp-add');
+  if (cpAdd) cpAdd.onclick = addCustomProvider;
   const keys = window.krait ? await window.krait.getMaskedKeys() : {};
   if (Object.keys(keys).length === 0) showSettings('keys'); else closeKeys();
   fillModelSelect(keys);
@@ -190,6 +192,7 @@ async function init() {
     K.memory = await window.krait.projectMemory();
     window.krait.onDelta(appendDelta);
     window.krait.onThinking(onThinkingDelta);
+    window.krait.onAskPermission(onAskPermission);
     window.krait.onTool(info => {
       if (currentAssistant) {
         const el = document.createElement('div');
@@ -353,8 +356,45 @@ function cleanStream(raw) {
   // inline tool JSON the model sometimes prints without a fence
   s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, m => toolChip(m));
   s = s.replace(/^\s*tool\s*$/mg, '');
+  // unescape literal \n the model dumps inside code blocks while streaming
+  s = s.replace(/```([\w+#]*)\n([\s\S]*?)```/g, (m0, lang, code) => {
+    if (!code.includes('\\n')) return m0;
+    return '```' + lang + '\n' + code.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t') + '```';
+  });
   return s;
 }
+
+/* ═══════════ Permission modal (polished, in-window) ═══════════ */
+const PERM_ICONS = { Write: '&#128221;', Edit: '&#128394;', Bash: '&#9889;', WebFetch: '&#127760;' };
+const PERM_ACTIONS = { Write: 'create or overwrite a file', Edit: 'edit a file', Bash: 'run a command on your computer', WebFetch: 'fetch a web page' };
+
+function onAskPermission(req) {
+  // "always allow" remembered per tool — answer instantly without showing the modal
+  const always = JSON.parse(localStorage.getItem('krait-always') || '{}');
+  if (always[req.tool]) {
+    window.krait.permissionResponse(req.id, 'allow');
+    return;
+  }
+  const modal = $('perm-modal');
+  $('perm-ic').innerHTML = PERM_ICONS[req.tool] || '&#128221;';
+  $('perm-title').textContent = 'krait wants to ' + (PERM_ACTIONS[req.tool] || 'use ' + req.tool);
+  $('perm-detail').textContent = req.detail || '';
+  modal.classList.remove('hidden');
+  const done = choice => {
+    modal.classList.add('hidden');
+    if (choice === 'always') {
+      always[req.tool] = true;
+      localStorage.setItem('krait-always', JSON.stringify(always));
+      window.krait.permissionResponse(req.id, 'allow');
+    } else {
+      window.krait.permissionResponse(req.id, choice);
+    }
+  };
+  $('perm-allow').onclick = () => done('allow');
+  $('perm-deny').onclick = () => done('deny');
+  $('perm-always').onclick = () => done('always');
+}
+
 
 /* ═══════════ Thoughts (reasoning shown like Claude's "Thought 4s") ═══════════ */
 let thoughtEl = null;      // current collapsible block
@@ -786,7 +826,7 @@ async function showUsage() {
 async function saveKeys(e) {
   e.preventDefault();
   if (!window.krait) return;
-  for (const p of ['gemini', 'openrouter', 'nvidia', 'anthropic']) {
+  for (const p of ['gemini', 'openrouter', 'nvidia', 'anthropic', 'groq', 'cerebras', 'mistral', 'huggingface', 'github']) {
     const el = $('k-' + p);
     if (el && el.value.trim()) {
       await window.krait.saveKey(p, el.value.trim());
@@ -795,10 +835,63 @@ async function saveKeys(e) {
   }
   const keys = await window.krait.getMaskedKeys();
   $('key-saved').textContent = 'Saved: ' + (Object.keys(keys).join(', ') || 'none');
+  renderCustomProviders(keys);
   if (Object.keys(keys).length) {
     fillModelSelect(keys);
     setTimeout(closeKeys, 600);
   }
+}
+
+/* ═══════════ Your own providers (custom name + base URL) ═══════════ */
+function renderCustomProviders(keys) {
+  const box = $('cp-list');
+  if (!box || !window.krait) return;
+  box.innerHTML = '';
+  window.krait.providersGet().then(cps => {
+    for (const [id, cfg] of Object.entries(cps)) {
+      const row = document.createElement('div');
+      row.className = 'plug-item';
+      row.innerHTML = '<div><div class="plug-name">' + escHtml(cfg.name || id) +
+        ' <span class="tag">' + escHtml(String(cfg.baseUrl || '').slice(0, 40)) + '</span></div>' +
+        '<div class="plug-desc">models: ' + escHtml((cfg.models || []).join(', ') || 'none yet') + '</div></div>';
+      const del = document.createElement('button');
+      del.className = 'conn-btn';
+      del.textContent = 'Remove';
+      del.onclick = async () => {
+        await window.krait.providersDelete(id);
+        const k = await window.krait.getMaskedKeys();
+        fillModelSelect(k);
+        renderCustomProviders(k);
+      };
+      row.appendChild(del);
+      box.appendChild(row);
+    }
+  });
+}
+
+async function addCustomProvider() {
+  const name = $('cp-name').value.trim();
+  const url = $('cp-url').value.trim();
+  const key = $('cp-key').value.trim();
+  const model = $('cp-model').value.trim();
+  if (!name || !url) { toast('Need a name and a base URL'); return; }
+  const id = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  if (!window.krait) return;
+  const cfg = { name, baseUrl: url, models: model ? [model] : [] };
+  // merge models if the provider already exists
+  const cur = await window.krait.providersGet();
+  if (cur[id]) {
+    if (model && !cur[id].models.includes(model)) cfg.models = (cur[id].models || []).concat(model);
+  }
+  await window.krait.providersAdd(id, cfg);
+  // the key is saved under the provider name so chat finds it
+  if (key) await window.krait.saveKey(id, key);
+  else await window.krait.saveKey(id, 'custom-' + id);
+  $('cp-name').value = ''; $('cp-url').value = ''; $('cp-key').value = ''; $('cp-model').value = '';
+  const keys = await window.krait.getMaskedKeys();
+  fillModelSelect(keys);
+  renderCustomProviders(keys);
+  toast('Provider "' + name + '" added — pick it in the model menu');
 }
 
 function showPlugins() {
@@ -958,7 +1051,7 @@ function showConnectors() {
 }
 
 /* ═══════════ Model list ═══════════ */
-function fillModelSelect(keys) {
+async function fillModelSelect(keys) {
   const sel = $('model-select');
   sel.innerHTML = '';
   const groups = {
@@ -974,12 +1067,40 @@ function fillModelSelect(keys) {
       ['gemini-2.5-flash', 'Gemini 2.5 Flash', true],
     ],
     nvidia: [
-      ['meta/llama-3.1-70b-instruct', 'Llama 3.1 70B', false],
-      ['mistralai/mistral-small-24b-instruct', 'Mistral Small 24B', false],
+      ['nvidia/nemotron-3-ultra-550b-a55b', 'Nemotron 3 Ultra 550B', false],
+      ['nvidia/nemotron-3.5-super-vl-120b-a12b', 'Nemotron 3.5 Super VL (vision)', true],
+      ['openai/gpt-oss-20b', 'GPT-OSS 20B', false],
+      ['deepseek-ai/deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', false],
     ],
     anthropic: [
       ['claude-sonnet-4-20250514', 'Claude Sonnet 4', true],
       ['claude-opus-4-20250514', 'Claude Opus 4', true],
+    ],
+    groq: [
+      ['llama-3.3-70b-versatile', 'Llama 3.3 70B (fast)', false],
+      ['openai/gpt-oss-120b', 'GPT-OSS 120B', false],
+      ['meta-llama/llama-4-scout-17b-16e-instruct', 'Llama 4 Scout', true],
+      ['qwen/qwen3-32b', 'Qwen 3 32B', false],
+    ],
+    cerebras: [
+      ['llama-3.3-70b', 'Llama 3.3 70B (ultra fast)', false],
+      ['gpt-oss-120b', 'GPT-OSS 120B', false],
+      ['qwen-3-32b', 'Qwen 3 32B', false],
+    ],
+    mistral: [
+      ['mistral-large-latest', 'Mistral Large', false],
+      ['pixtral-large-latest', 'Pixtral Large', true],
+      ['mistral-small-latest', 'Mistral Small', false],
+    ],
+    huggingface: [
+      ['meta-llama/Llama-3.3-70B-Instruct', 'Llama 3.3 70B', false],
+      ['Qwen/Qwen2.5-72B-Instruct', 'Qwen 2.5 72B', false],
+      ['mistralai/Pixtral-12B-2409', 'Pixtral 12B', true],
+    ],
+    github: [
+      ['openai/gpt-4o-mini', 'GPT-4o mini', false],
+      ['openai/gpt-4o', 'GPT-4o', true],
+      ['meta-llama/Llama-3.3-70B-Instruct', 'Llama 3.3 70B', false],
     ],
   };
 
@@ -994,6 +1115,25 @@ function fillModelSelect(keys) {
       o.value = ns + '/' + id;
       o.textContent = name + (vision ? ' (vision)' : '');
       o.dataset.vision = vision ? '1' : '0';
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+
+  // your own providers (name + base URL you added in Settings → API keys)
+  let customs = [];
+  if (window.krait) { try { customs = Object.entries(await window.krait.providersGet()); } catch {} }
+  for (const [id, cfg] of customs) {
+    if (!keys[id]) continue; // needs a key saved under the provider name
+    any = true;
+    const og = document.createElement('optgroup');
+    og.label = cfg.name + ' (yours)';
+    const list = (cfg.models && cfg.models.length) ? cfg.models : ['(pick in settings)'];
+    for (const m of list) {
+      const o = document.createElement('option');
+      o.value = id + '/' + m;
+      o.textContent = m;
+      o.dataset.vision = '0';
       og.appendChild(o);
     }
     sel.appendChild(og);

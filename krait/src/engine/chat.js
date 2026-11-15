@@ -15,6 +15,14 @@ const { Keychain } = require('./keychain');
 const REASONING_EFFORT = { low: 'low', medium: 'medium', high: 'high', max: 'high', ultra: 'high', normal: 'medium' };
 const THINK_BUDGET = { low: 1024, medium: 2048, high: 4096, max: 8192, ultra: 8192, normal: 2048 };
 
+/** Custom providers the user added: ~/.krait/providers.json = { id: { name, baseUrl, models: [] } } */
+function customProvidersPath() {
+  return path.join(os.homedir(), '.krait', 'providers.json');
+}
+function loadCustomProviders() {
+  try { return JSON.parse(require('fs').readFileSync(customProvidersPath(), 'utf8')) || {}; } catch { return {}; }
+}
+
 function keychain() {
   return new Keychain(path.join(os.homedir(), '.krait'));
 }
@@ -130,21 +138,35 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     };
     body = {
       model,
-      max_tokens: budget + 4096,
+      max_tokens: budget + 8192,
       stream: true,
       thinking: { type: 'enabled', budget_tokens: budget },
       system: sys,
       messages: clean.map(m => buildMessage('anthropic', m)),
     };
-  } else if (ns === 'openrouter' || ns === 'nvidia') {
-    const base = ns === 'openrouter'
-      ? 'https://openrouter.ai/api/v1'
-      : 'https://integrate.api.nvidia.com/v1';
+  } else {
+    // OpenAI-compatible: openrouter, nvidia + all the new free providers + custom ones
+    const BASE_URLS = {
+      openrouter: 'https://openrouter.ai/api/v1',
+      nvidia: 'https://integrate.api.nvidia.com/v1',
+      groq: 'https://api.groq.com/openai/v1',
+      cerebras: 'https://api.cerebras.ai/v1',
+      mistral: 'https://api.mistral.ai/v1',
+      huggingface: 'https://router.huggingface.co/v1',
+      github: 'https://models.github.ai/inference',
+    };
+    let base = BASE_URLS[ns];
+    if (!base) {
+      // custom provider added by the user (name + base URL in ~/.krait/providers.json)
+      const custom = loadCustomProviders()[ns];
+      if (!custom || !custom.baseUrl) throw new Error('Unknown provider "' + ns + '".');
+      base = String(custom.baseUrl).replace(/\/+$/, '');
+    }
     url = base + '/chat/completions';
     headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key };
     if (ns === 'openrouter') headers['HTTP-Referer'] = 'https://krait.local';
-    // high effort → let the model think AND answer with more tokens
-    const maxTok = ['high', 'max', 'ultra'].includes((opts && opts.effort) || '') ? 8192 : 4096;
+    // high effort → bigger budget so long files don't get cut off mid-Write
+    const maxTok = ['high', 'max', 'ultra'].includes((opts && opts.effort) || '') ? 16384 : 8192;
     body = {
       model,
       stream: true,
@@ -156,22 +178,25 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     if (ns === 'openrouter' && (!opts || opts.thinking !== false)) {
       body.reasoning = { effort: REASONING_EFFORT[(opts && opts.effort) || 'medium'] || 'medium' };
     }
-  } else {
-    throw new Error('Unknown provider "' + ns + '".');
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
+  const doFetch = () => fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  let res = await doFetch();
+  // free pools rate-limit constantly — wait a bit and retry once
+  if (res.status === 429) {
+    await new Promise(r => setTimeout(r, 6000));
+    if (signal && signal.aborted) throw new Error('aborted');
+    res = await doFetch();
+  }
 
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
     try {
       const j = await res.json();
-      msg = (j.error && (j.error.message || j.error.msg)) || j.message || JSON.stringify(j).slice(0, 300);
+      const e = j.error || j;
+      // OpenRouter hides the useful reason (e.g. "rate-limited upstream") in metadata.raw
+      msg = (e.metadata && e.metadata.raw) || e.message || e.msg || JSON.stringify(j).slice(0, 300);
+      if (res.status === 429) msg = 'rate-limited (' + msg + ')';
     } catch {}
     throw new Error(ns + ': ' + msg);
   }
@@ -182,6 +207,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
   let full = '';
   let think = '';
   let usage = null;
+  let truncated = false;
   const onThinking = (opts && opts.onThinking) || null;
 
   while (true) {
@@ -199,6 +225,15 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       try { j = JSON.parse(payload); } catch { continue; }
       if (j.error) throw new Error((j.error.message || 'stream error') + '');
       if (j.type === 'error') throw new Error((j.error && j.error.message) || 'stream error');
+      // did the model hit the output limit? (the "cut off" bug)
+      if (ns === 'gemini') {
+        if (j.candidates && j.candidates[0] && j.candidates[0].finishReason === 'MAX_TOKENS') truncated = true;
+      } else if (ns === 'anthropic') {
+        if (j.type === 'message_delta' && j.delta && j.delta.stop_reason === 'max_tokens') truncated = true;
+      } else {
+        const c = j.choices && j.choices[0];
+        if (c && c.finish_reason === 'length') truncated = true;
+      }
       const td = extractThinking(ns, j);
       if (td) {
         think += td;
@@ -216,7 +251,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
 
   if (!full.trim() && !think.trim()) throw new Error(ns + ' returned an empty reply (check your key and model).');
   if (!usage) usage = estimateUsage(sys, clean, full + think);
-  return { text: full, usage, thinking: think };
+  return { text: full, usage, thinking: think, truncated };
 }
 
 function extractUsage(ns, j) {
