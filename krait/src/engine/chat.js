@@ -42,6 +42,44 @@ function buildSystem(opts) {
 }
 
 /**
+ * Build one user/assistant message in the provider's shape.
+ * Message = { role, content, images?: [dataUrl, ...] }
+ */
+function buildMessage(ns, m) {
+  const images = (m.images || []).filter(Boolean).map(parseDataUrl).filter(Boolean);
+  if (!images.length) return { role: m.role, content: m.content };
+
+  if (ns === 'gemini') {
+    const parts = [{ text: m.content }];
+    for (const im of images) {
+      parts.push({ inline_data: { mime_type: im.mime, data: im.base64 } });
+    }
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts };
+  }
+  if (ns === 'anthropic') {
+    const blocks = [];
+    for (const im of images) {
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.base64 } });
+    }
+    blocks.push({ type: 'text', text: m.content });
+    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: blocks };
+  }
+  // OpenAI-compatible (openrouter, nvidia)
+  const content = [];
+  for (const im of images) {
+    content.push({ type: 'image_url', image_url: { url: 'data:' + im.mime + ';base64,' + im.base64 } });
+  }
+  content.push({ type: 'text', text: m.content });
+  return { role: m.role, content };
+}
+
+function parseDataUrl(dataUrl) {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!m) return null;
+  return { mime: m[1], base64: m[2] };
+}
+
+/**
  * Stream a chat completion. Calls onDelta(textChunk) as words arrive.
  * Returns { text, usage } — usage is real token counts from the API
  * ({ input, output, total }), estimated as a fallback.
@@ -55,8 +93,8 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
 
   const sys = buildSystem(opts);
   const clean = messages
-    .filter(m => m && m.role !== 'system' && m.content)
-    .map(m => ({ role: m.role, content: String(m.content) }));
+    .filter(m => m && m.role !== 'system' && (m.content || (m.images && m.images.length)))
+    .map(m => ({ role: m.role, content: m.content ? String(m.content) : '', images: m.images || [] }));
 
   let url, headers, body;
 
@@ -66,10 +104,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     headers = { 'Content-Type': 'application/json' };
     body = {
       systemInstruction: { parts: [{ text: sys }] },
-      contents: clean.map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      })),
+      contents: clean.map(m => buildMessage('gemini', m)),
     };
   } else if (ns === 'anthropic') {
     url = 'https://api.anthropic.com/v1/messages';
@@ -83,7 +118,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       max_tokens: 4096,
       stream: true,
       system: sys,
-      messages: clean.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+      messages: clean.map(m => buildMessage('anthropic', m)),
     };
   } else if (ns === 'openrouter' || ns === 'nvidia') {
     const base = ns === 'openrouter'
@@ -97,7 +132,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       stream: true,
       max_tokens: 4096,
       stream_options: { include_usage: true },
-      messages: [{ role: 'system', content: sys }, ...clean],
+      messages: [{ role: 'system', content: sys }, ...clean.map(m => buildMessage(ns, m))],
     };
   } else {
     throw new Error('Unknown provider "' + ns + '".');

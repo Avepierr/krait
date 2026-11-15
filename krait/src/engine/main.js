@@ -10,12 +10,15 @@ const { runAgent } = require('./agent');
 const DATA_DIR = path.join(os.homedir(), '.krait');
 const PROJECT_DIR = path.resolve(__dirname, '..', '..');
 const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
+const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
+const MCP_FILE = path.join(DATA_DIR, 'mcp.json');
+const fs = require('fs');
 let win = null;
 let currentAbort = null;
 
 // ─── Token usage store (per API provider) ───
 function loadUsage() {
-  try { return JSON.parse(require('fs').readFileSync(USAGE_FILE, 'utf8')); }
+  try { return JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8')); }
   catch { return {}; }
 }
 function recordUsage(provider, u) {
@@ -26,7 +29,21 @@ function recordUsage(provider, u) {
   all[provider].output += u.output || 0;
   all[provider].total += u.total || 0;
   all[provider].calls += 1;
-  try { require('fs').writeFileSync(USAGE_FILE, JSON.stringify(all, null, 2)); } catch {}
+  try { fs.writeFileSync(USAGE_FILE, JSON.stringify(all, null, 2)); } catch {}
+}
+
+// ─── Projects (each project = a folder the AI works in) ───
+function loadProjects() {
+  try { return JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8')); }
+  catch { return { active: null, list: [] }; }
+}
+function saveProjects(p) {
+  try { fs.writeFileSync(PROJECTS_FILE, JSON.stringify(p, null, 2)); } catch {}
+}
+function activeProjectDir() {
+  const p = loadProjects();
+  const a = p.list.find(x => x.id === p.active);
+  return a ? a.dir : PROJECT_DIR;
 }
 
 function createWindow() {
@@ -77,7 +94,7 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
       final = await runAgent({
         modelId,
         messages: messages || [],
-        opts: { ...o, projectDir: PROJECT_DIR },
+        opts: { ...o, projectDir: activeProjectDir() },
         signal: currentAbort.signal,
         sendDelta: delta => {
           if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
@@ -137,24 +154,100 @@ ipcMain.handle('krait:sessions-load', (_, id) => store.load(id));
 ipcMain.handle('krait:sessions-list', () => store.list());
 ipcMain.handle('krait:sessions-delete', (_, id) => { store.delete(id); return true; });
 
-// ─── Project memory (KRAIT.md / AGENTS.md at the project root) ───
+// ─── Project memory (KRAIT.md / AGENTS.md in the active project) ───
 ipcMain.handle('krait:project-memory', () => {
+  const dir = activeProjectDir();
   const files = ['KRAIT.md', 'AGENTS.md'];
   let memory = '';
   for (const f of files) {
     try {
-      const t = require('fs').readFileSync(path.join(PROJECT_DIR, f), 'utf8').trim();
+      const t = fs.readFileSync(path.join(dir, f), 'utf8').trim();
       if (t) memory += (memory ? '\n\n' : '') + '--- ' + f + ' ---\n' + t;
     } catch {}
   }
   return memory || null;
 });
 
+// ─── Projects IPC ───
+ipcMain.handle('krait:projects-get', () => loadProjects());
+ipcMain.handle('krait:projects-add', (_, name, dir) => {
+  const p = loadProjects();
+  const id = require('crypto').randomUUID();
+  p.list.push({ id, name: name || 'project', dir });
+  if (!p.active) p.active = id;
+  saveProjects(p);
+  return p;
+});
+ipcMain.handle('krait:projects-set-active', (_, id) => {
+  const p = loadProjects();
+  p.active = id;
+  saveProjects(p);
+  return p;
+});
+ipcMain.handle('krait:projects-delete', (_, id) => {
+  const p = loadProjects();
+  p.list = p.list.filter(x => x.id !== id);
+  if (p.active === id) p.active = p.list.length ? p.list[0].id : null;
+  saveProjects(p);
+  return p;
+});
+ipcMain.handle('krait:pick-folder', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+
+// ─── MCP servers config + connection test ───
+function loadMcp() {
+  try { return JSON.parse(fs.readFileSync(MCP_FILE, 'utf8')); }
+  catch { return { servers: [] }; }
+}
+ipcMain.handle('krait:mcp-get', () => loadMcp());
+ipcMain.handle('krait:mcp-save', (_, cfg) => {
+  fs.writeFileSync(MCP_FILE, JSON.stringify(cfg, null, 2));
+  return true;
+});
+ipcMain.handle('krait:mcp-test', async (_, server) => {
+  const { McpClient } = require('./mcp');
+  const c = new McpClient(server);
+  try {
+    const info = await c.connect();
+    const tools = await c.listTools();
+    c.disconnect();
+    return { ok: true, name: (info && info.name) || 'server', tools: tools.length };
+  } catch (err) {
+    c.disconnect();
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+// ─── Artifacts: download / open files the AI creates ───
+ipcMain.handle('krait:download-file', async (_, srcPath) => {
+  const src = path.isAbsolute(srcPath) ? srcPath : path.join(activeProjectDir(), srcPath);
+  if (!fs.existsSync(src)) return { ok: false, error: 'File not found: ' + src };
+  const base = path.basename(src);
+  const r = await dialog.showSaveDialog(win, { defaultPath: base });
+  if (r.canceled || !r.filePath) return { ok: false, error: 'cancelled' };
+  try {
+    fs.copyFileSync(src, r.filePath);
+    return { ok: true, savedTo: r.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('krait:open-file', async (_, p) => {
+  const full = path.isAbsolute(p) ? p : path.join(activeProjectDir(), p);
+  if (!fs.existsSync(full)) return { ok: false, error: 'not found' };
+  const { shell } = require('electron');
+  await shell.openPath(full);
+  return { ok: true };
+});
+
 // ─── Git changes (for the Changes panel) ───
 ipcMain.handle('krait:git-diff', () => {
+  const dir = activeProjectDir();
   return new Promise(resolve => {
-    exec('git diff --stat HEAD', { cwd: PROJECT_DIR, timeout: 15000, windowsHide: true }, (e1, statOut) => {
-      exec('git diff HEAD', { cwd: PROJECT_DIR, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (e2, diffOut) => {
+    exec('git diff --stat HEAD', { cwd: dir, timeout: 15000, windowsHide: true }, (e1, statOut) => {
+      exec('git diff HEAD', { cwd: dir, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (e2, diffOut) => {
         resolve({
           stat: (statOut || '').trim() || '(no uncommitted changes)',
           diff: (diffOut || '').slice(0, 100000),
@@ -173,7 +266,7 @@ ipcMain.handle('krait:abort', () => {
 ipcMain.handle('krait:terminal', (_, cmd) => {
   return new Promise(resolve => {
     exec(cmd, {
-      cwd: PROJECT_DIR,
+      cwd: activeProjectDir(),
       timeout: 30000,
       maxBuffer: 2 * 1024 * 1024,
       windowsHide: true,

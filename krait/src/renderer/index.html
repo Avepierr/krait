@@ -14,9 +14,9 @@
   </div>
   <div class="tb-drag"></div>
   <div class="tb-right">
-    <button id="btn-changes" class="tb-btn" title="Changes (git diff)">&#9663; Changes</button>
+    <button id="btn-mcp" class="tb-btn" title="MCP servers">&#128268; MCP</button>
     <button id="btn-terminal" class="tb-btn" title="Terminal">&gt;_</button>
-    <button id="btn-settings" class="tb-btn" title="API keys">&#9881;</button>
+    <button id="btn-settings" class="tb-btn" title="Settings">&#9881;</button>
     <button id="btn-min" class="tb-btn" title="Minimize">&#9472;</button>
     <button id="btn-max" class="tb-btn" title="Maximize">&#9634;</button>
     <button id="btn-close" class="tb-btn tb-close" title="Close">&#10005;</button>
@@ -25,7 +25,11 @@
 
 <div id="app">
   <aside id="sidebar">
-    <button id="btn-new" class="new-btn">+ New chat</button>
+    <button id="btn-new" class="new-btn">+ New</button>
+    <div id="new-menu" class="hidden">
+      <button class="nm-item" id="nm-chat">&#43; New chat</button>
+      <button class="nm-item" id="nm-projects">&#128193; Projects</button>
+    </div>
     <div id="sessions"></div>
 
     <!-- profile block, bottom-left -->
@@ -33,7 +37,7 @@
       <div class="p-avatar" id="p-avatar"></div>
       <div class="p-info">
         <div class="p-name">krait</div>
-        <div class="p-sub" id="p-sub">free &middot; local keys</div>
+        <div class="p-sub" id="p-sub">free &middot; your keys</div>
       </div>
     </div>
   </aside>
@@ -48,6 +52,7 @@
           <option value="normal">Normal</option>
           <option value="plan">Plan</option>
           <option value="auto">Auto</option>
+          <option value="bypass">Bypass</option>
         </select>
         <select id="effort-select" title="Effort">
           <option value="low">Low</option>
@@ -57,13 +62,15 @@
           <option value="ultra">Ultracode</option>
         </select>
         <span class="spacer"></span>
-        <span id="token-info" title="Tokens used this chat (from the API)">0 tok</span>
+        <span id="token-info" title="Tokens used this chat">0 tok</span>
       </div>
       <div class="row">
-        <textarea id="prompt" rows="1" placeholder="Ask anything..."></textarea>
+        <button id="btn-attach" class="attach-btn" title="Attach images or files (+)">&#43;</button>
+        <textarea id="prompt" rows="1" placeholder="How can I help you today?"></textarea>
         <button id="btn-send" class="round" title="Send (Enter)">&#10148;</button>
         <button id="btn-stop" class="round stop" title="Stop" style="display:none">&#9632;</button>
       </div>
+      <div id="attachments"></div>
     </div>
   </main>
 
@@ -71,70 +78,139 @@
     <div id="term-out"></div>
     <input id="term-in" placeholder="$ command" spellcheck="false" autocomplete="off">
   </aside>
-
-  <aside id="changes" class="hidden">
-    <div class="drawer-head">Changes <button id="changes-close" class="tb-btn">&#10005;</button></div>
-    <div id="changes-stat"></div>
-    <div id="changes-diff"></div>
-  </aside>
 </div>
 
 <!-- profile menu -->
 <div id="profile-menu" class="hidden">
-  <button class="pm-item" id="pm-settings">&#9881; Settings &amp; keys</button>
-  <button class="pm-item" id="pm-plugins">&#9881;&#65039; Plugins</button>
+  <button class="pm-item" id="pm-settings">&#9881; Settings</button>
+  <button class="pm-item" id="pm-projects">&#128193; Projects</button>
+  <button class="pm-item" id="pm-plugins">&#129518; Plugins</button>
+  <button class="pm-item" id="pm-skills">&#127919; Skills</button>
   <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
+  <button class="pm-item" id="pm-mcp">&#127760; MCP servers</button>
   <div class="pm-sep"></div>
-  <div class="pm-about">krait v0.4.0 &middot; your keys, your models</div>
+  <div class="pm-about">krait v0.6.0 &middot; by Avepier</div>
+</div>
+
+<!-- projects modal -->
+<div id="projects-screen" class="modal">
+  <div class="modal-box">
+    <button class="modal-close" id="projects-close">&#10005;</button>
+    <h1>Projects</h1>
+    <p class="key-sub">A project is a folder the AI works in. It gets its own memory and tools.</p>
+    <div id="projects-list"></div>
+    <div class="proj-add">
+      <input id="proj-name" placeholder="Project name">
+      <button id="proj-pick" class="conn-btn">Choose folder...</button>
+      <button id="proj-add" class="conn-btn on">Add project</button>
+    </div>
+    <div id="proj-dir" class="proj-dir"></div>
+  </div>
 </div>
 
 <!-- settings screen -->
 <div id="key-screen">
-  <div class="key-box">
+  <div class="set-shell">
+    <aside class="set-side">
+      <div class="set-head">
+        <img src="../../assets/icon.png" class="set-logo" alt="">
+        <div>
+          <div class="set-plan">Free plan</div>
+          <div class="set-plan-sub">your keys &middot; your models</div>
+        </div>
+      </div>
+      <button class="set-nav active" data-page="account">&#128100; Account</button>
+      <button class="set-nav" data-page="appearance">&#127912; Appearance</button>
+      <button class="set-nav" data-page="keys">&#128273; API keys</button>
+      <button class="set-nav" data-page="usage">&#128200; Usage</button>
+      <button class="set-nav" data-page="capabilities">&#9881;&#65039; Capabilities</button>
+      <button class="set-nav" data-page="plugins">&#129518; Plugins</button>
+      <button class="set-nav" data-page="skills">&#127919; Skills</button>
+      <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
+      <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
+      <div class="set-side-foot">krait v0.6.0 &middot; by Avepier</div>
+    </aside>
+    <div class="set-main">
+      <div class="set-page" id="page-account">
+        <h2>Account</h2>
+        <div class="feat-list" id="feat-list"></div>
+      </div>
+      <div class="set-page" id="page-appearance" style="display:none">
+        <h2>Appearance</h2>
+        <p class="key-sub">Pick the app color. Changes instantly.</p>
+        <div class="theme-row">
+          <button class="theme-card" data-theme="dark">
+            <div class="theme-preview dark"></div>Dark (default)
+          </button>
+          <button class="theme-card" data-theme="light">
+            <div class="theme-preview light"></div>White
+          </button>
+        </div>
+      </div>
+      <div class="set-page" id="page-keys" style="display:none">
+        <h2>API keys</h2>
+        <form id="key-form">
+          <label>Gemini <a href="https://aistudio.google.com/apikey" target="_blank">get free</a>
+            <input id="k-gemini" type="password" placeholder="AIza...">
+          </label>
+          <label>OpenRouter <a href="https://openrouter.ai/keys" target="_blank">get free</a>
+            <input id="k-openrouter" type="password" placeholder="sk-or...">
+          </label>
+          <label>NVIDIA <a href="https://build.nvidia.com" target="_blank">get free</a>
+            <input id="k-nvidia" type="password" placeholder="nvapi-...">
+          </label>
+          <label>Anthropic <a href="https://console.anthropic.com" target="_blank">get key</a>
+            <input id="k-anthropic" type="password" placeholder="sk-ant-...">
+          </label>
+          <div id="key-saved"></div>
+          <button type="submit" class="key-start">Save keys &#10148;</button>
+        </form>
+      </div>
+      <div class="set-page" id="page-usage" style="display:none">
+        <h2>Usage</h2>
+        <p class="key-sub">Token usage per API (all-time, real numbers from the providers).</p>
+        <div id="usage-table"></div>
+        <button id="usage-reset" class="conn-btn" style="margin-top:12px">Reset usage</button>
+      </div>
+      <div class="set-page" id="page-capabilities" style="display:none">
+        <h2>Capabilities</h2>
+        <p class="key-sub">Defaults for new chats.</p>
+        <div class="cap-row"><span>Default mode</span>
+          <select id="cap-mode"><option value="normal">Normal</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypass">Bypass</option></select>
+        </div>
+        <div class="cap-row"><span>Default effort</span>
+          <select id="cap-effort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option><option value="ultra">Ultracode</option></select>
+        </div>
+      </div>
+      <div class="set-page" id="page-plugins" style="display:none">
+        <h2>Plugins</h2>
+        <p class="key-sub">Tools krait can use while coding. Off = the AI can't use it.</p>
+        <div id="plugins-list"></div>
+      </div>
+      <div class="set-page" id="page-skills" style="display:none">
+        <h2>Skills</h2>
+        <p class="key-sub">Ready-made skill packs. On = the AI gets expert instructions for that job.</p>
+        <div id="skills-list"></div>
+      </div>
+      <div class="set-page" id="page-connectors" style="display:none">
+        <h2>Connectors</h2>
+        <p class="key-sub">Link outside services to your workspace.</p>
+        <div id="connectors-list"></div>
+      </div>
+      <div class="set-page" id="page-mcp" style="display:none">
+        <h2>MCP servers</h2>
+        <p class="key-sub">Connect external tools over MCP (Model Context Protocol). Point at any stdio server.</p>
+        <div id="mcp-list"></div>
+        <div class="mcp-add">
+          <input id="mcp-name" placeholder="Server name">
+          <input id="mcp-cmd" placeholder="command (e.g. node C:\path\server.js)">
+          <input id="mcp-args" placeholder="args (space separated)">
+          <button id="mcp-add" class="conn-btn on">Add server</button>
+        </div>
+        <div id="mcp-status"></div>
+      </div>
+    </div>
     <button id="key-close" class="key-close" title="Close">&#10005;</button>
-    <img class="key-icon" src="../../assets/icon.png" alt="">
-    <h1 id="settings-title">krait</h1>
-    <div class="set-tabs">
-      <button class="set-tab active" data-tab="keys">Keys</button>
-      <button class="set-tab" data-tab="usage">Usage</button>
-      <button class="set-tab" data-tab="plugins">Plugins</button>
-      <button class="set-tab" data-tab="connectors">Connectors</button>
-    </div>
-
-    <div class="set-page" id="page-keys">
-      <form id="key-form">
-        <label>Gemini <a href="https://aistudio.google.com/apikey" target="_blank">get free</a>
-          <input id="k-gemini" type="password" placeholder="AIza...">
-        </label>
-        <label>OpenRouter <a href="https://openrouter.ai/keys" target="_blank">get free</a>
-          <input id="k-openrouter" type="password" placeholder="sk-or...">
-        </label>
-        <label>NVIDIA <a href="https://build.nvidia.com" target="_blank">get free</a>
-          <input id="k-nvidia" type="password" placeholder="nvapi-...">
-        </label>
-        <label>Anthropic <a href="https://console.anthropic.com" target="_blank">get key</a>
-          <input id="k-anthropic" type="password" placeholder="sk-ant-...">
-        </label>
-        <div id="key-saved"></div>
-        <button type="submit" class="key-start">Save keys &#10148;</button>
-      </form>
-    </div>
-
-    <div class="set-page" id="page-usage" style="display:none">
-      <p class="key-sub" style="margin-bottom:12px">Token usage per API (all-time, real numbers from the providers).</p>
-      <div id="usage-table"></div>
-      <button id="usage-reset" class="conn-btn" style="margin-top:12px;width:100%">Reset usage</button>
-    </div>
-
-    <div class="set-page" id="page-plugins" style="display:none">
-      <p class="key-sub" style="margin-bottom:12px">Tools krait can use while coding. Off = the AI can't use it.</p>
-      <div id="plugins-list"></div>
-    </div>
-
-    <div class="set-page" id="page-connectors" style="display:none">
-      <p class="key-sub" style="margin-bottom:12px">Link outside services to your workspace.</p>
-      <div id="connectors-list"></div>
-    </div>
   </div>
 </div>
 

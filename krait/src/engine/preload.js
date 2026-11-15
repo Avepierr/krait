@@ -23,6 +23,19 @@ contextBridge.exposeInMainWorld('krait', {
   resetUsage: () => ipcRenderer.invoke('krait:reset-usage'),
   onTool: cb => ipcRenderer.on('krait:tool', (_, info) => cb(info)),
 
+  projectsGet: () => ipcRenderer.invoke('krait:projects-get'),
+  projectsAdd: (n, d) => ipcRenderer.invoke('krait:projects-add', n, d),
+  projectsSetActive: id => ipcRenderer.invoke('krait:projects-set-active', id),
+  projectsDelete: id => ipcRenderer.invoke('krait:projects-delete', id),
+  pickFolder: () => ipcRenderer.invoke('krait:pick-folder'),
+
+  mcpGet: () => ipcRenderer.invoke('krait:mcp-get'),
+  mcpSave: cfg => ipcRenderer.invoke('krait:mcp-save', cfg),
+  mcpTest: server => ipcRenderer.invoke('krait:mcp-test', server),
+
+  downloadFile: p => ipcRenderer.invoke('krait:download-file', p),
+  openFile: p => ipcRenderer.invoke('krait:open-file', p),
+
   runTerminal: c => ipcRenderer.invoke('krait:terminal', c),
 
   minimize: () => ipcRenderer.invoke('krait:minimize'),

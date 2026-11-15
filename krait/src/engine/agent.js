@@ -79,6 +79,10 @@ async function runAgent(deps) {
   const toolset = new ToolSet(baseDir);
 
   const tools = toolPrompt(enabled);
+  const skills = (opts && opts.skills && opts.skills.length)
+    ? '\nSKILLS - extra instructions for this job:\n' + opts.skills.join('\n')
+    : '';
+  const sysExtra = (tools || '') + skills;
   const convo = messages.map(m => ({ role: m.role, content: m.content }));
 
   let finalText = '';
@@ -93,7 +97,7 @@ async function runAgent(deps) {
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const res = await streamChat(modelId, convo, sendDelta, signal,
-      { ...opts, tools: tools || undefined });
+      { ...opts, tools: sysExtra || undefined });
     accUsage(res.usage);
 
     const calls = parseToolBlocks(res.text);
