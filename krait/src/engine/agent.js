@@ -24,15 +24,16 @@ function toolPrompt(enabled) {
   const set = new ToolSet('.');
   const all = set.list().filter(t => enabled.includes(t.name));
   if (!all.length) return '';
-  let s = 'TOOLS - you can use these tools. To call one, output exactly a fenced block like:\n' +
+  let s = 'TOOLS - you can use these tools. To call one, output EXACTLY this fenced format (nothing else in the block):\n' +
     '```tool\n{"name": "ToolName", "input": {"arg": "value"}}\n```\n' +
-    'Wait for TOOL RESULTS before continuing. Never invent results. ' +
+    'RULES: One tool call per fenced block. NEVER describe a tool call in words - always emit the block. ' +
+    'Never invent results. After you receive TOOL RESULTS, continue.\n' +
     'Available tools:\n';
   for (const t of all) {
     s += '- ' + t.name + ': ' + t.description + '. Args: ' +
       JSON.stringify(t.input_schema.properties || {}) + '\n';
   }
-  s += 'Paths are relative to the project root. After using tools, give the user a short, clear answer.';
+  s += 'Paths are relative to the project root. After using tools, give the user a short, clear answer and mention they can download created files from the card in the chat.';
   return s;
 }
 
@@ -46,11 +47,60 @@ function parseToolBlocks(text) {
       if (j && j.name) calls.push({ name: j.name, input: j.input || {} });
     } catch {}
   }
+  if (calls.length) return calls;
+  // Fallback: models often write the tool call as bare JSON without the fence,
+  // e.g. {"name": "Write", "input": {"path": "...", "content": "..."}}
+  // Scan with brace matching so nested {} in content don't break it.
+  const NAMES = 'Read|Write|Edit|Bash|Glob|Grep|WebFetch';
+  const startRe = new RegExp('\\{\\s*"name"\\s*:\\s*"(' + NAMES + ')"', 'g');
+  let s;
+  while ((s = startRe.exec(text)) !== null) {
+    // brace-match the WHOLE outer object starting at the '{' we found
+    let depth = 1, inStr = false, esc = false;
+    let i = s.index + 1;
+    for (; i < text.length && depth > 0; i++) {
+      const c = text[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+    }
+    if (depth !== 0) break; // malformed, stop scanning
+    try {
+      const j = JSON.parse(text.slice(s.index, i));
+      calls.push({ name: j.name, input: j.input || {} });
+      startRe.lastIndex = i;
+    } catch {}
+  }
   return calls;
 }
 
 function stripToolBlocks(text) {
-  return text.replace(TOOL_BLOCK_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  let s = text.replace(TOOL_BLOCK_RE, '');
+  // also strip bare inline tool JSON from the visible answer
+  const NAMES = 'Read|Write|Edit|Bash|Glob|Grep|WebFetch';
+  const startRe = new RegExp('\\{\\s*"name"\\s*:\\s*"(' + NAMES + ')"', 'g');
+  while (true) {
+    const s2 = startRe.exec(s);
+    if (!s2) break;
+    let depth = 1, inStr = false, esc = false;
+    let i = s2.index + 1;
+    for (; i < s.length && depth > 0; i++) {
+      const c = s[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+    }
+    if (depth !== 0) break;
+    s = s.slice(0, s2.index) + s.slice(i);
+    startRe.lastIndex = 0;
+  }
+  return s.replace(/^\s*tool\s*$/mg, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function summarize(out) {

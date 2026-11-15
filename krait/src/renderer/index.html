@@ -184,8 +184,13 @@
       </div>
       <div class="set-page" id="page-plugins" style="display:none">
         <h2>Plugins</h2>
-        <p class="key-sub">Tools krait can use while coding. Off = the AI can't use it.</p>
+        <div class="disc-tabs">
+          <button class="disc-tab active" data-ptab="yours">Yours</button>
+          <button class="disc-tab" data-ptab="discover">Discover</button>
+          <input id="plugin-search" class="disc-search" placeholder="Search plugins...">
+        </div>
         <div id="plugins-list"></div>
+        <div id="discover-list" style="display:none"></div>
       </div>
       <div class="set-page" id="page-skills" style="display:none">
         <h2>Skills</h2>

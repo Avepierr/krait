@@ -292,6 +292,7 @@ function addMsg(role, text, images) {
     : '<div class="avatar bot">' + SNAKE + '</div>';
   el.innerHTML = avatar + '<div class="bubble"><div class="who">' + who +
     '</div><div class="thumbs"></div><div class="text"></div><div class="tok-note" style="font-size:11px;color:var(--fg3);margin-top:4px"></div></div>';
+  el.querySelector('.text').textContent = text || '';
   if (images && images.length) {
     const th = el.querySelector('.thumbs');
     for (const u of images) {
@@ -325,17 +326,30 @@ function appendDelta(d) {
   const t = currentAssistant.querySelector('.text');
   if (!t.dataset.raw) t.dataset.raw = '';
   t.dataset.raw += d;
-  setMsgMarkdown(currentAssistant, t.dataset.raw);
+  setMsgMarkdown(currentAssistant, cleanStream(t.dataset.raw));
+}
+
+/** Hide raw tool-call JSON from the live view: show a small chip instead. */
+function cleanStream(raw) {
+  let s = String(raw);
+  // complete fenced tool blocks
+  s = s.replace(/```tool\s*\n?[\s\S]*?```/g, '\n\u2699 using tool...\n');
+  // trailing unclosed tool block (still streaming)
+  const idx = s.lastIndexOf('```tool');
+  if (idx >= 0) s = s.slice(0, idx) + '\n\u2699 using tool...\n';
+  // inline tool JSON the model sometimes prints without a fence
+  s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, '\u2699 using tool...');
+  s = s.replace(/^\s*tool\s*$/mg, '');
+  return s;
 }
 
 function addArtifact(bubbleEl, path) {
-  if (!bubbleEl) return;
   const name = String(path).split(/[\\/]/).pop();
   const card = document.createElement('div');
   card.className = 'artifact';
   card.innerHTML =
     '<div class="a-icon">' + iconFor(name) + '</div>' +
-    '<div class="a-name">' + escHtml(name) + '</div>' +
+    '<div class="a-name">' + escHtml(name) + '<span class="a-sub">created by krait \u2014 download or open</span></div>' +
     '<button class="a-btn open">Open</button>' +
     '<button class="a-btn">Download</button>';
   const [openBtn, dlBtn] = card.querySelectorAll('button');
@@ -350,7 +364,8 @@ function addArtifact(bubbleEl, path) {
     const r = await window.krait.openFile(path);
     if (!r.ok) toast('Could not open: ' + (r.error || ''));
   };
-  bubbleEl.appendChild(card);
+  const host = bubbleEl || $('messages');
+  host.appendChild(card);
   scrollDown();
 }
 
@@ -402,6 +417,7 @@ async function send() {
     addMsg('assistant', 'No model yet. Click the gear in the title bar, add an API key, then pick a model.');
     return;
   }
+  if (images.length) ensureVisionModel();
 
   prompt.value = '';
   prompt.style.height = 'auto';
@@ -469,7 +485,8 @@ function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 function activeSkillHints() {
   const saved = JSON.parse(localStorage.getItem('krait-skills') || '{}');
-  return SKILLS.filter(s => saved[s.id] !== false).map(s => s.hint);
+  const own = SKILLS.filter(s => saved[s.id] !== false).map(s => s.hint);
+  return own.concat(communityHintText());
 }
 
 /* ═══════════ Sessions ═══════════ */
@@ -696,9 +713,56 @@ async function saveKeys(e) {
 }
 
 function showPlugins() {
+  // tab switching
+  document.querySelectorAll('.disc-tab').forEach(t => {
+    t.onclick = () => {
+      document.querySelectorAll('.disc-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      $('plugins-list').style.display = t.dataset.ptab === 'yours' ? '' : 'none';
+      $('discover-list').style.display = t.dataset.ptab === 'discover' ? '' : 'none';
+      if (t.dataset.ptab === 'discover') renderDiscover($('plugin-search').value);
+    };
+  });
+  $('plugin-search').oninput = () => {
+    if (!$('discover-list').style.display || $('discover-list').style.display === 'none') return;
+    renderDiscover($('plugin-search').value);
+  };
+  renderYours();
+}
+
+const COMMUNITY_PLUGINS = [
+  { id: 'comm-data', name: 'Data Cruncher', by: 'krait community', desc: 'Analyze CSV/JSON data, make charts and stats with Bash + scripts' },
+  { id: 'comm-web', name: 'Site Grabber', by: 'krait community', desc: 'Deep web scraping recipes: read pages, extract links and tables' },
+  { id: 'comm-python', name: 'Python Helper', by: 'krait community', desc: 'Run and fix Python scripts automatically with Bash' },
+  { id: 'comm-node', name: 'Node Runner', by: 'krait community', desc: 'Run and debug Node.js scripts, install packages' },
+  { id: 'comm-ui', name: 'UI Polisher', by: 'Avepier', desc: 'Reviews HTML/CSS it writes and restyles it to look modern' },
+  { id: 'comm-tests', name: 'Test Writer', by: 'Avepier', desc: 'Writes quick test scripts for code it changes' },
+  { id: 'comm-md', name: 'Doc Writer', by: 'krait community', desc: 'Turns chats into clean README/markdown docs' },
+];
+
+function communityHints() {
+  const installed = JSON.parse(localStorage.getItem('krait-community') || '[]');
+  return COMMUNITY_PLUGINS.filter(p => installed.includes(p.id)).map(p => p.id);
+}
+
+function communityHintText() {
+  const hints = {
+    'comm-data': 'When analyzing data files, use Bash with python or node scripts and produce charts/summaries.',
+    'comm-web': 'When doing web work, use WebFetch aggressively: read pages, follow relevant links, extract structured data.',
+    'comm-python': 'Prefer writing and running Python scripts via Bash to verify they work before telling the user.',
+    'comm-node': 'Prefer writing and running Node scripts via Bash; you may use npm to install small packages.',
+    'comm-ui': 'After writing HTML/CSS, review it and apply modern polish: good spacing, contrast, hover states.',
+    'comm-tests': 'After editing code, write a quick test script and run it with Bash to confirm it works.',
+    'comm-md': 'When the user asks for docs, write a clean README.md with the Write tool.',
+  };
+  return communityHints().map(id => hints[id]).filter(Boolean);
+}
+
+function renderYours() {
   const saved = JSON.parse(localStorage.getItem('krait-plugins') || '{}');
+  const installed = JSON.parse(localStorage.getItem('krait-community') || '[]');
   const box = $('plugins-list');
-  box.innerHTML = '';
+  box.innerHTML = '<p class="key-sub" style="margin-bottom:10px">Built-in tools. Off = the AI can\'t use it.</p>';
   for (const p of PLUGINS) {
     const row = document.createElement('div');
     row.className = 'plug-item';
@@ -711,6 +775,54 @@ function showPlugins() {
       localStorage.setItem('krait-plugins', JSON.stringify(saved));
     };
     row.appendChild(t);
+    box.appendChild(row);
+  }
+  if (installed.length) {
+    const h = document.createElement('p');
+    h.className = 'key-sub'; h.style.margin = '14px 0 6px';
+    h.textContent = 'Installed from Discover';
+    box.appendChild(h);
+    for (const c of COMMUNITY_PLUGINS.filter(x => installed.includes(x.id))) {
+      const row = document.createElement('div');
+      row.className = 'plug-item';
+      row.innerHTML = '<div><div class="plug-name">' + c.name + ' <span class="tag">community</span></div><div class="plug-desc">' + c.desc + '</div></div>';
+      const rm = document.createElement('button');
+      rm.className = 'conn-btn'; rm.textContent = 'Remove';
+      rm.onclick = () => {
+        localStorage.setItem('krait-community', JSON.stringify(installed.filter(i => i !== c.id)));
+        renderYours();
+      };
+      row.appendChild(rm);
+      box.appendChild(row);
+    }
+  }
+}
+
+function renderDiscover(q) {
+  const installed = JSON.parse(localStorage.getItem('krait-community') || '[]');
+  const box = $('discover-list');
+  box.innerHTML = '';
+  const query = (q || '').toLowerCase();
+  const list = COMMUNITY_PLUGINS.filter(p => !query || p.name.toLowerCase().includes(query) || p.desc.toLowerCase().includes(query));
+  if (!list.length) {
+    box.innerHTML = '<div class="usage-empty">No plugins match "' + escHtml(q) + '".</div>';
+    return;
+  }
+  for (const c of list) {
+    const row = document.createElement('div');
+    row.className = 'plug-item';
+    row.innerHTML = '<div><div class="plug-name">' + c.name + ' <span class="tag">' + escHtml(c.by) + '</span></div><div class="plug-desc">' + c.desc + '</div></div>';
+    const b = document.createElement('button');
+    b.className = 'conn-btn' + (installed.includes(c.id) ? ' on' : '');
+    b.textContent = installed.includes(c.id) ? 'Installed' : 'Install';
+    b.onclick = () => {
+      const cur = JSON.parse(localStorage.getItem('krait-community') || '[]');
+      if (!cur.includes(c.id)) cur.push(c.id);
+      localStorage.setItem('krait-community', JSON.stringify(cur));
+      renderDiscover($('plugin-search').value);
+      toast('Installed: ' + c.name);
+    };
+    row.appendChild(b);
     box.appendChild(row);
   }
 }
@@ -760,25 +872,24 @@ function showConnectors() {
 function fillModelSelect(keys) {
   const sel = $('model-select');
   sel.innerHTML = '';
-  const groups = {
     openrouter: [
-      ['nvidia/nemotron-3-ultra-550b-a55b:free', 'Nemotron 3 Ultra 550B (free)'],
-      ['google/gemma-4-31b-it:free', 'Gemma 4 31B (free)'],
-      ['baidu/ernie-5.5-flash-preview:free', 'ERNIE 5.5 Flash (free)'],
-      ['cohere/north-mini-code:free', 'North Mini Code (free)'],
-      ['nvidia/nemotron-3.5-super-vl:free', 'Nemotron 3.5 Vision (free)'],
+      ['nvidia/nemotron-3-ultra-550b-a55b:free', 'Nemotron 3 Ultra 550B (free)', false],
+      ['google/gemma-4-31b-it:free', 'Gemma 4 31B (free)', true],
+      ['baidu/ernie-5.5-flash-preview:free', 'ERNIE 5.5 Flash (free)', false],
+      ['cohere/north-mini-code:free', 'North Mini Code (free)', false],
+      ['nvidia/nemotron-3.5-super-vl:free', 'Nemotron 3.5 Vision (free)', true],
     ],
     gemini: [
-      ['gemini-2.0-flash', 'Gemini 2.0 Flash'],
-      ['gemini-2.5-flash', 'Gemini 2.5 Flash'],
+      ['gemini-2.0-flash', 'Gemini 2.0 Flash', true],
+      ['gemini-2.5-flash', 'Gemini 2.5 Flash', true],
     ],
     nvidia: [
-      ['meta/llama-3.1-70b-instruct', 'Llama 3.1 70B'],
-      ['mistralai/mistral-small-24b-instruct', 'Mistral Small 24B'],
+      ['meta/llama-3.1-70b-instruct', 'Llama 3.1 70B', false],
+      ['mistralai/mistral-small-24b-instruct', 'Mistral Small 24B', false],
     ],
     anthropic: [
-      ['claude-sonnet-4-20250514', 'Claude Sonnet 4'],
-      ['claude-opus-4-20250514', 'Claude Opus 4'],
+      ['claude-sonnet-4-20250514', 'Claude Sonnet 4', true],
+      ['claude-opus-4-20250514', 'Claude Opus 4', true],
     ],
   };
 
@@ -788,10 +899,11 @@ function fillModelSelect(keys) {
     any = true;
     const og = document.createElement('optgroup');
     og.label = ns;
-    for (const [id, name] of models) {
+    for (const [id, name, vision] of models) {
       const o = document.createElement('option');
       o.value = ns + '/' + id;
-      o.textContent = name;
+      o.textContent = name + (vision ? ' (vision)' : '');
+      o.dataset.vision = vision ? '1' : '0';
       og.appendChild(o);
     }
     sel.appendChild(og);
@@ -810,12 +922,27 @@ function fillModelSelect(keys) {
   sel.disabled = false;
   sel.selectedIndex = 0;
   K.model = sel.value;
+  K.vision = sel.options[sel.selectedIndex].dataset.vision === '1';
   sel.onchange = () => {
     if (K.model && K.model !== sel.value) {
       addNotice('Switched model: <b>' + sel.options[sel.selectedIndex].textContent + '</b>');
     }
     K.model = sel.value;
+    K.vision = sel.options[sel.selectedIndex].dataset.vision === '1';
   };
+}
+
+/** When images are attached, make sure the selected model can see. */
+function ensureVisionModel() {
+  if (K.vision) return;
+  const sel = $('model-select');
+  const v = Array.from(sel.options).find(o => o.dataset.vision === '1');
+  if (v) {
+    sel.value = v.value;
+    K.model = v.value;
+    K.vision = true;
+    addNotice('Switched to <b>' + v.textContent + '</b> so krait can see your image.');
+  }
 }
 
 /* ═══════════ Terminal / Toast ═══════════ */
