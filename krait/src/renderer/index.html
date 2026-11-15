@@ -7,110 +7,118 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-
-<!-- Frameless titlebar -->
-<header id="titlebar">
-  <div class="titlebar-drag">
-    <img src="" class="titlebar-icon" alt="">
-    <span class="titlebar-name">krait</span>
-    <span id="session-name" class="titlebar-session">— untitled</span>
-  </div>
-  <div class="titlebar-controls">
-    <button class="tb-btn" id="btn-minimize">─</button>
-    <button class="tb-btn" id="btn-maximize">□</button>
-    <button class="tb-btn tb-close" id="btn-close">✕</button>
-  </div>
-</header>
-
-<div id="app-layout">
-  <!-- Left sidebar -->
-  <aside id="sidebar">
-    <div class="sidebar-header">
-      <button class="btn-new" id="btn-new-session">+ New</button>
+  <!-- Custom frameless titlebar -->
+  <header id="titlebar">
+    <div class="titlebar-left">
+      <img id="title-icon" src="" alt="" class="titlebar-icon">
+      <span class="titlebar-brand">krait</span>
+      <span class="titlebar-sep">&#47;&#47;</span>
+      <span class="titlebar-title" id="session-title">Code</span>
     </div>
-    <div id="session-list"></div>
-  </aside>
+    <div class="titlebar-drag" id="titlebar-drag"></div>
+    <div class="titlebar-right">
+      <button class="tb-btn" id="tb-settings" title="Settings">&#9881;</button>
+      <button class="tb-btn" id="tb-minimize" title="Minimize">&#9472;</button>
+      <button class="tb-btn" id="tb-maximize" title="Maximize">&#9634;</button>
+      <button class="tb-btn tb-close" id="tb-close" title="Close">&#10005;</button>
+    </div>
+  </header>
 
-  <!-- Main area -->
-  <main id="main-area">
-    <section id="conversation-panel">
-      <div id="messages-container"></div>
-
-      <!-- Composer -->
-      <div id="composer">
-        <div class="composer-row">
-          <button id="composer-attach" class="composer-btn" title="Attach files">+</button>
-          <div id="composer-input-wrapper">
-            <div class="mode-chip">
-              <select id="mode-select">
-                <option value="manual">Manual</option>
-                <option value="acceptEdits">Accept edits</option>
-                <option value="plan">Plan</option>
-              </select>
-            </div>
-            <textarea id="composer-input" rows="2" placeholder="Ask anything, anywhere…"></textarea>
-          </div>
-          <button id="composer-send" class="composer-btn btn-send" title="Send (Enter)">→</button>
-          <button id="composer-stop" class="composer-btn btn-stop" title="Stop (Esc)" style="display:none">■</button>
-        </div>
-        <div class="composer-footer">
-          <select id="model-select" class="model-chip">
-            <option value="">— pick a model —</option>
-          </select>
-        </div>
+  <div id="app">
+    <!-- SIDEBAR -->
+    <aside id="sidebar">
+      <div class="sidebar-top">
+        <button id="new-session-btn" class="btn-new-session">+ New</button>
+        <div id="project-info">REA-OpenCode</div>
       </div>
-    </section>
-
-    <!-- Right panels -->
-    <aside id="right-panels" class="collapsed">
-      <div class="panel-tabs">
-        <button class="panel-tab active" data-panel="changes">Changes</button>
-        <button class="panel-tab" data-panel="terminal">Terminal</button>
-        <button class="panel-tab" data-panel="files">Files</button>
-      </div>
-      <div id="panel-changes" class="panel-content active"></div>
-      <div id="panel-terminal" class="panel-content">
-        <div id="terminal-output"></div>
-        <div class="terminal-input-row"><input type="text" id="terminal-input" placeholder="$ enter a command"></div>
-      </div>
-      <div id="panel-files" class="panel-content"></div>
+      <div id="session-list" class="session-list"></div>
     </aside>
-  </main>
-</div>
 
-<!-- Keys screen overlay -->
-<section id="keys-screen" class="overlay show">
-  <div class="overlay-content">
-    <div class="krait-snake-icon"><svg viewBox="0 0 64 64" width="64" height="64"><rect x="4" y="4" width="14" height="14" fill="#222"/><rect x="18" y="4" width="14" height="14" fill="#00D68F"/><rect x="32" y="4" width="14" height="14" fill="#222"/><rect x="4" y="18" width="14" height="14" fill="#00D68F"/><rect x="18" y="18" width="14" height="14" fill="#222"/><rect x="32" y="18" width="14" height="14" fill="#00D68F"/><rect x="46" y="18" width="14" height="14" fill="#222"/><rect x="4" y="32" width="14" height="14" fill="#222"/><rect x="18" y="32" width="14" height="14" fill="#00D68F"/><rect x="32" y="32" width="14" height="14" fill="#222"/><rect x="46" y="32" width="14" height="14" fill="#00D68F"/><rect x="18" y="46" width="14" height="14" fill="#222"/><rect x="32" y="46" width="14" height="14" fill="#00D68F"/><rect x="46" y="46" width="14" height="14" fill="#222"/></svg></div>
-    <h1>krait</h1>
-    <p class="overlay-sub">Free, model-agnostic coding agent</p>
-    <form id="keys-form">
-      <div class="key-field">
-        <label>Google Gemini API Key</label>
-        <div class="key-row"><input type="password" id="key-gemini" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="gemini">Test</button></div>
-        <a class="key-link" href="https://aistudio.google.com/apikey" target="_blank">Get one free →</a>
-      </div>
-      <div class="key-field">
-        <label>OpenRouter API Key</label>
-        <div class="key-row"><input type="password" id="key-openrouter" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="openrouter">Test</button></div>
-        <a class="key-link" href="https://openrouter.ai/keys" target="_blank">Get one free →</a>
-      </div>
-      <div class="key-field">
-        <label>NVIDIA API Key</label>
-        <div class="key-row"><input type="password" id="key-nvidia" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="nvidia">Test</button></div>
-        <a class="key-link" href="https://build.nvidia.com/" target="_blank">Get one free →</a>
-      </div>
-      <div class="key-field">
-        <label>Anthropic API Key (optional — real Claude models)</label>
-        <div class="key-row"><input type="password" id="key-anthropic" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="anthropic">Test</button></div>
-        <a class="key-link" href="https://console.anthropic.com/" target="_blank">Get one →</a>
-      </div>
-      <div id="key-status" class="key-status"></div>
-      <button type="submit" class="btn-primary" id="keys-start">Start Coding →</button>
-    </form>
+    <!-- MAIN -->
+    <main id="main">
+      <!-- CHAT -->
+      <section id="chat-panel">
+        <div id="messages"></div>
+
+        <!-- COMPOSER -->
+        <div id="composer">
+          <div class="composer-toolbar">
+            <select id="mode-select" class="chip-select" title="Permission mode">
+              <option value="manual">Manual</option>
+              <option value="acceptEdits">Accept edits</option>
+              <option value="plan">Plan</option>
+              <option value="auto">Auto</option>
+              <option value="bypass">Bypass</option>
+            </select>
+            <select id="effort-select" class="chip-select" title="Effort level">
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">X-High</option>
+              <option value="max">Maximum</option>
+              <option value="ultracode">Ultracode</option>
+            </select>
+            <button id="thinking-toggle" class="chip-btn" title="Thinking">&#9889; Thinking</button>
+            <div class="composer-spacer"></div>
+          </div>
+
+          <div class="composer-row">
+            <button id="attach-btn" class="composer-attach" title="Attach files, images, or context">+</button>
+            <div class="composer-main">
+              <div id="composer-chips" class="composer-chips" id="composer-chips">
+                <span class="chip mode-chip" id="mode-chip">Manual</span>
+                <span class="chip effort-chip" id="effort-chip">Normal</span>
+              </div>
+              <div contenteditable="true" id="prompt-area" class="prompt-area" data-placeholder="Type anything, anywhere, anywhere" role="textbox"></div>
+            </div>
+            <button id="send-btn" class="composer-send" title="Send (Enter)">→</button>
+            <button id="stop-btn" class="composer-stop" title="Stop (Esc)" style="display:none">■</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT PANEL -->
+      <aside id="right-panel">
+        <div class="panel-tabs">
+          <button class="tab active" data-tab="model-picker">Model</button>
+          <button class="tab" data-tab="changes">Changes</button>
+          <button class="tab" data-tab="terminal">Terminal</button>
+          <button class="tab" data-tab="files">Files</button>
+        </div>
+        <div class="tab-content" id="tab-model-picker"></div>
+        <div class="tab-content" id="tab-changes"><div class="empty-state">No changes yet</div></div>
+        <div class="tab-content" id="tab-terminal"><div id="terminal-out"></div><input id="term-input" class="term-input" placeholder="$ enter a command"></div>
+        <div class="tab-content" id="tab-files"><div class="empty-state">No open files</div></div>
+      </aside>
+    </main>
   </div>
-</section>
 
-<script src="app.js"></script>
+  <!-- KEY SCREEN (overlay, shown first-run) -->
+  <div id="key-overlay" class="overlay">
+    <div class="overlay-box">
+      <img id="key-icon" src="" alt="" class="key-icon">
+      <h1>krait</h1>
+      <p class="key-sub">Connect your own API keys. No subscription needed.</p>
+      <form id="key-form">
+        <div class="key-row">
+          <label>Gemini</label><input type="password" id="k-gemini"><a class="key-ref" href="https://aistudio.google.com/apikey" target="_blank">Get free</a>
+        </div>
+        <div class="key-row">
+          <label>OpenRouter</label><input type="password" id="k-openrouter"><a class="key-ref" href="https://openrouter.ai/keys" target="_blank">Get free</a>
+        </div>
+        <div class="key-row">
+          <label>NVIDIA</label><input type="password" id="k-nvidia"><a class="key-ref" href="https://build.nvidia.com" target="_blank">Get free</a>
+        </div>
+        <div class="key-row">
+          <label>Anthropic</label><input type="password" id="k-anthropic"><a class="key-ref" href="https://console.anthropic.com" target="_blank">Get key</a>
+        </div>
+        <div id="key-status"></div>
+        <button type="submit" class="btn-start">Start coding →</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>

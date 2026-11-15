@@ -1,17 +1,1 @@
-{
-  "name": "krait",
-  "version": "0.2.0",
-  "description": "Free, model-agnostic coding agent",
-  "main": "src/engine/main.js",
-  "bin": {
-    "krait": "src/engine/cli.js"
-  },
-  "scripts": {
-    "start": "electron .",
-    "cli": "node src/engine/cli.js",
-    "check": "node src/engine/self-check.js"
-  },
-  "dependencies": {
-    "electron": "^45.3.2"
-  }
-}
+{"name":"krait","version":"0.3.0","description":"Free model-agnostic coding agent - desktop + CLI","main":"src/engine/main.js","bin":{"krait":"src/engine/cli.js"},"scripts":{"start":"electron .","cli":"node src/engine/cli.js","check":"node src/engine/self-check.js"},"dependencies":{"electron":"^33.0.0"}}

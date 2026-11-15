@@ -1,33 +1,25 @@
 'use strict';
-/**
- * krait Electron main process.
- * Creates the window with the Code view UI, sets taskbar/icon, frameless.
- */
-
-const { app, BrowserWindow, ipcMain, nativeImage, Tray } = require('electron');
+const { app, BrowserWindow, nativeImage, ipcMain } = require('electron');
 const path = require('path');
-const fs = require('fs');
 const os = require('os');
-
+const { execSync } = require('child_process');
 const { Keychain } = require('./keychain');
 const { SessionStore } = require('./session');
-const { Harness } = require('./harness');
 
 const DATA_DIR = path.join(os.homedir(), '.krait');
-let mainWindow = null;
+let win = null;
 
 function createWindow() {
-  const icon = nativeImage.createFromPath(path.join(__dirname, '..', '..', 'assets', 'icon.png'));
+  const iconPath = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+  const icon = nativeImage.createFromPath(iconPath);
 
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 800,
-    minHeight: 600,
+  win = new BrowserWindow({
+    width: 1280, height: 820, minWidth: 900, minHeight: 600,
     icon,
     title: 'krait',
-    titleBarStyle: 'hiddenInset',
     frame: false,
+    backgroundColor: '#0f0f0f',
+    titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -35,45 +27,24 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-
-  // Set overlay icon for taskbar
-  if (process.platform === 'win32') {
-    app.setAppUserModelId('krait');
-  }
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.platform === 'win32') app.setAppUserModelId('krait');
 }
 
-// IPC handlers for engine operations
-ipcMain.handle('krait:has-key', (event, provider) => {
-  const kc = new Keychain(DATA_DIR);
-  return kc.has(provider);
+// ─── IPC handlers ───
+ipcMain.handle('krait:has-key', (_, p) => new Keychain(DATA_DIR).has(p));
+ipcMain.handle('krait:save-key', (_, { p, k }) => { new Keychain(DATA_DIR).save(p, k); return true; });
+ipcMain.handle('krait:delete-key', (_, p) => { new Keychain(DATA_DIR).delete(p); return true; });
+ipcMain.handle('krait:get-masked-keys', () => new Keychain(DATA_DIR).list());
+ipcMain.handle('krait:terminal', (_, cmd) => {
+  try {
+    const out = execSync(cmd, { timeout: 30000, encoding: 'utf8', maxBuffer: 2*1024*1024 });
+    return { ok: true, stdout: out, stderr: '' };
+  } catch (err) { return { ok: false, stdout: err.stdout || '', stderr: err.stderr || err.message }; }
 });
+ipcMain.handle('krait:minimize', () => win?.minimize());
+ipcMain.handle('krait:maximize', () => { win?.isMaximized() ? win.unmaximize() : win?.maximize(); });
+ipcMain.handle('krait:close', () => win?.close());
 
-ipcMain.handle('krait:save-key', (event, { provider, key }) => {
-  const kc = new Keychain(DATA_DIR);
-  kc.save(provider, key);
-  return true;
-});
-
-ipcMain.handle('krait:delete-key', (event, provider) => {
-  const kc = new Keychain(DATA_DIR);
-  kc.delete(provider);
-  return true;
-});
-
-ipcMain.handle('krait:get-masked-keys', () => {
-  const kc = new Keychain(DATA_DIR);
-  return kc.list();
-});
-
-ipcMain.handle('krait:window-minimize', () => mainWindow?.minimize());
-ipcMain.handle('krait:window-maximize', () => {
-  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-  else mainWindow?.maximize();
-});
-ipcMain.handle('krait:window-close', () => mainWindow?.close());
-
-// Run in background — keep app alive
 app.on('window-all-closed', () => {});
-
 app.whenReady().then(createWindow);
