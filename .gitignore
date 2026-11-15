@@ -1,0 +1,40 @@
+# ---- installed packages ----
+node_modules/
+vendor/
+packages/
+
+# ---- built apps ----
+dist/
+build/
+out/
+release/
+*.exe
+*.msi
+*.msix
+*.appx
+*.AppImage
+*.dmg
+*.asar
+
+# ---- study and checks folders ----
+study/
+checks/
+
+# ---- keys and secrets ----
+keys/
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+*credentials*
+keyring*
+
+# ---- local machine junk ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+npm-debug.log*
