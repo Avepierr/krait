@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('krait', {
   projectMemory: () => ipcRenderer.invoke('krait:project-memory'),
   gitDiff: () => ipcRenderer.invoke('krait:git-diff'),
 
+  getUsage: () => ipcRenderer.invoke('krait:get-usage'),
+  resetUsage: () => ipcRenderer.invoke('krait:reset-usage'),
+  onTool: cb => ipcRenderer.on('krait:tool', (_, info) => cb(info)),
+
   runTerminal: c => ipcRenderer.invoke('krait:terminal', c),
 
   minimize: () => ipcRenderer.invoke('krait:minimize'),

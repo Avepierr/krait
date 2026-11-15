@@ -1,15 +1,33 @@
 'use strict';
-const { app, BrowserWindow, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, nativeImage, ipcMain, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
 const { exec } = require('child_process');
 const { Keychain } = require('./keychain');
 const { streamChat } = require('./chat');
+const { runAgent } = require('./agent');
 
 const DATA_DIR = path.join(os.homedir(), '.krait');
 const PROJECT_DIR = path.resolve(__dirname, '..', '..');
+const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
 let win = null;
 let currentAbort = null;
+
+// ─── Token usage store (per API provider) ───
+function loadUsage() {
+  try { return JSON.parse(require('fs').readFileSync(USAGE_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function recordUsage(provider, u) {
+  if (!u || !provider) return;
+  const all = loadUsage();
+  if (!all[provider]) all[provider] = { input: 0, output: 0, total: 0, calls: 0 };
+  all[provider].input += u.input || 0;
+  all[provider].output += u.output || 0;
+  all[provider].total += u.total || 0;
+  all[provider].calls += 1;
+  try { require('fs').writeFileSync(USAGE_FILE, JSON.stringify(all, null, 2)); } catch {}
+}
 
 function createWindow() {
   const icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'icon.png'));
@@ -49,18 +67,64 @@ ipcMain.handle('krait:get-masked-keys', () => new Keychain(DATA_DIR).list());
 // ─── Chat (real, streaming) ───
 ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
   currentAbort = new AbortController();
-  let full = '';
+  const ns = String(modelId).split('/')[0];
+  const o = opts || {};
+  let final = { text: '', usage: null };
+
   try {
-    full = await streamChat(modelId, messages || [], delta => {
-      if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
-    }, currentAbort.signal, opts || {});
-    return { text: full.text, usage: full.usage };
+    // With tools enabled → agent loop (tool calls + permission popups)
+    if (o.enabledTools && o.enabledTools.length) {
+      final = await runAgent({
+        modelId,
+        messages: messages || [],
+        opts: { ...o, projectDir: PROJECT_DIR },
+        signal: currentAbort.signal,
+        sendDelta: delta => {
+          if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
+        },
+        sendTool: info => {
+          if (!event.sender.isDestroyed()) event.sender.send('krait:tool', info);
+        },
+        askPermission: req => askViaDialog(req),
+        streamChat,
+      });
+    } else {
+      // plain chat, no tools
+      const r = await streamChat(modelId, messages || [], delta => {
+        if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
+      }, currentAbort.signal, o);
+      final = { text: r.text, usage: r.usage };
+    }
+
+    if (final.usage) recordUsage(ns, final.usage);
+    return { text: final.text, usage: final.usage };
   } catch (err) {
-    if (err && err.name === 'AbortError') return { text: full, aborted: true };
+    if (err && err.name === 'AbortError') return { text: final.text, aborted: true };
     return { error: String((err && err.message) || err) };
   } finally {
     currentAbort = null;
   }
+});
+
+/** Native permission popup for dangerous tools. */
+async function askViaDialog(req) {
+  if (!win) return false;
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['Allow', 'Deny'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    message: 'krait wants to use ' + req.tool,
+    detail: req.detail + '\n\nAllow this?',
+  });
+  return r.response === 0;
+}
+
+ipcMain.handle('krait:get-usage', () => loadUsage());
+ipcMain.handle('krait:reset-usage', () => {
+  try { require('fs').writeFileSync(USAGE_FILE, JSON.stringify({}, null, 2)); } catch {}
+  return true;
 });
 
 // ─── Sessions (save / resume) ───

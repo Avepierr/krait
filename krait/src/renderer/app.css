@@ -116,11 +116,22 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 #changes-diff .add { color: #4caf50; background: rgba(76,175,80,0.1); }
 #changes-diff .del { color: #ef5350; background: rgba(239,83,80,0.1); }
 
-/* ── Overlays (plugins / connectors) ── */
-.overlay { display: none; position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; }
-.overlay.show { display: flex; }
-.overlay-box { width: 480px; max-width: 92vw; max-height: 80vh; overflow-y: auto; background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 26px; position: relative; }
-.overlay-box h1 { text-align: center; color: var(--accent); font-size: 22px; }
+/* ── Settings tabs ── */
+.set-tabs { display: flex; gap: 4px; margin: 14px 0 10px; border-bottom: 1px solid var(--border); }
+.set-tab { flex: 1; background: none; border: none; color: var(--fg3); font-size: 12.5px; padding: 8px 4px; cursor: pointer; border-bottom: 2px solid transparent; }
+.set-tab:hover { color: var(--fg); }
+.set-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Usage table ── */
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.usage-table th { text-align: left; color: var(--fg3); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+.usage-table td { padding: 8px; border-bottom: 1px solid var(--border); color: var(--fg); font-family: var(--mono); }
+.usage-empty { text-align: center; color: var(--fg3); font-size: 13px; padding: 20px; }
+
+/* ── Tool activity lines under a reply ── */
+.tool-activity { font-size: 11.5px; color: var(--accent); font-family: var(--mono); padding: 3px 0; }
+.tool-activity.blocked { color: var(--fg3); }
+.toolchip { display: inline-block; font-size: 11.5px; color: var(--fg3); background: var(--bg3); border: 1px dashed var(--border); border-radius: 6px; padding: 3px 10px; margin: 4px 0; }
 .plug-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--border); }
 .plug-name { font-size: 13px; color: var(--fg); font-weight: 600; }
 .plug-desc { font-size: 11.5px; color: var(--fg3); margin-top: 2px; }

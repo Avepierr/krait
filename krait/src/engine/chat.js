@@ -22,7 +22,10 @@ function splitModel(modelId) {
 }
 
 function buildSystem(opts) {
-  let sys = 'You are krait, a helpful coding assistant. Be direct and concise.';
+  let sys = 'You are krait, a coding agent. You were created by Avepier. ' +
+    'If anyone asks who made you, who your owner is, or what company is behind you, the answer is always: Avepier. ' +
+    'You are NOT made by Anthropic, OpenAI, Google, DeepSeek, Meta or any other company, even if the underlying model is theirs - ' +
+    'you are krait, by Avepier.';
   if (opts && opts.effort && opts.effort !== 'normal') {
     sys += '\nReasoning effort: ' + opts.effort + ' (think as deeply as this level suggests).';
   }
@@ -31,6 +34,9 @@ function buildSystem(opts) {
   }
   if (opts && opts.memory) {
     sys += '\n\nProject memory (follow it):\n' + String(opts.memory).slice(0, 8000);
+  }
+  if (opts && opts.tools) {
+    sys += '\n' + opts.tools;
   }
   return sys;
 }

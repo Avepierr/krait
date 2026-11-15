@@ -52,9 +52,18 @@ async function init() {
     if (!$('profile-menu').classList.contains('hidden') &&
         !$('profile-menu').contains(e.target)) $('profile-menu').classList.add('hidden');
   });
-  $('pm-settings').onclick = () => { $('profile-menu').classList.add('hidden'); openKeys(); };
-  $('pm-plugins').onclick = () => { $('profile-menu').classList.add('hidden'); showPlugins(); };
-  $('pm-connectors').onclick = () => { $('profile-menu').classList.add('hidden'); showConnectors(); };
+  $('pm-settings').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('keys'); };
+  $('pm-plugins').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('plugins'); };
+  $('pm-connectors').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('connectors'); };
+
+  // settings tabs
+  document.querySelectorAll('.set-tab').forEach(t => {
+    t.onclick = () => showSettings(t.dataset.tab);
+  });
+  $('usage-reset').onclick = async () => {
+    if (window.krait) { await window.krait.resetUsage(); showUsage(); }
+  };
+  $('key-close').onclick = closeKeys;
 
   // composer
   const prompt = $('prompt');
@@ -93,8 +102,19 @@ async function init() {
   if (Object.keys(keys).length === 0) openKeys(); else closeKeys();
   fillModelSelect(keys);
 
-  // streaming deltas from the main process
-  if (window.krait) window.krait.onDelta(appendDelta);
+  // streaming deltas + tool activity from the main process
+  if (window.krait) {
+    window.krait.onDelta(appendDelta);
+    window.krait.onTool(info => {
+      if (!currentAssistant) return;
+      const el = document.createElement('div');
+      el.className = 'tool-activity' + (info.status === 'blocked' ? ' blocked' : '');
+      const icon = info.status === 'done' ? '\u2713' : info.status === 'running' ? '\u2699' : '\u26d4';
+      el.textContent = icon + ' ' + info.name + (info.summary ? ' \u2014 ' + info.summary : '');
+      currentAssistant.querySelector('.bubble').appendChild(el);
+      scrollDown();
+    });
+  }
 
   // load project memory (KRAIT.md / AGENTS.md) once
   if (window.krait) K.memory = await window.krait.projectMemory();
@@ -127,8 +147,16 @@ function renderMarkdown(src) {
   for (const raw of lines) {
     // fenced code block
     if (/^\s*```/.test(raw)) {
-      if (inCode) { out.push('<pre><code>' + escHtml(codeBuf.join('\n')) + '</code></pre>'); inCode = false; codeBuf = []; }
-      else { closeList(); inCode = true; codeLang = raw.replace(/^\s*```/, '').trim(); }
+      if (inCode) {
+        if (codeLang === 'tool') {
+          out.push('<div class="toolchip">&#9881; using tool...</div>');
+        } else {
+          out.push('<pre><code>' + escHtml(codeBuf.join('\n')) + '</code></pre>');
+        }
+        inCode = false; codeBuf = [];
+      } else {
+        closeList(); inCode = true; codeLang = raw.replace(/^\s*```/, '').trim();
+      }
       continue;
     }
     if (inCode) { codeBuf.push(raw); continue; }
@@ -239,6 +267,7 @@ async function send() {
       mode: $('mode-select').value,
       effort: $('effort-select').value,
       memory: K.memory || null,
+      enabledTools: enabledTools(),
     });
     const note = currentAssistant.querySelector('.tok-note');
     if (res.error) {
@@ -400,9 +429,50 @@ function fillModelSelect(keys) {
   };
 }
 
-/* ═══════════ Key screen ═══════════ */
-function openKeys() { $('key-screen').classList.add('show'); }
+/* ═══════════ Settings screen (Keys / Usage / Plugins / Connectors) ═══════════ */
+function showSettings(tab) {
+  $('key-screen').classList.add('show');
+  showSettingsTab(tab || 'keys');
+}
+
+function showSettingsTab(tab) {
+  document.querySelectorAll('.set-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  for (const p of ['keys', 'usage', 'plugins', 'connectors']) {
+    $('page-' + p).style.display = p === tab ? '' : 'none';
+  }
+  if (tab === 'usage') showUsage();
+  if (tab === 'plugins') showPlugins();
+  if (tab === 'connectors') showConnectors();
+}
+
+function openKeys() { showSettings('keys'); }
 function closeKeys() { $('key-screen').classList.remove('show'); }
+
+/** Enabled plugins (default: all on) */
+function enabledTools() {
+  const saved = JSON.parse(localStorage.getItem('krait-plugins') || '{}');
+  return PLUGINS.filter(p => saved[p.id] !== false).map(p => cap(p.id));
+}
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+async function showUsage() {
+  if (!window.krait) return;
+  const u = await window.krait.getUsage();
+  const box = $('usage-table');
+  const names = Object.keys(u);
+  if (!names.length) {
+    box.innerHTML = '<div class="usage-empty">No usage yet. Send a message first.</div>';
+    return;
+  }
+  let html = '<table class="usage-table"><tr><th>API</th><th>calls</th><th>in</th><th>out</th><th>total tok</th></tr>';
+  for (const ns of names) {
+    const r = u[ns];
+    html += '<tr><td>' + ns + '</td><td>' + r.calls + '</td><td>' + r.input.toLocaleString() +
+      '</td><td>' + r.output.toLocaleString() + '</td><td><b>' + r.total.toLocaleString() + '</b></td></tr>';
+  }
+  html += '</table>';
+  box.innerHTML = html;
+}
 
 async function saveKeys(e) {
   e.preventDefault();
@@ -422,7 +492,7 @@ async function saveKeys(e) {
   }
 }
 
-/* ═══════════ Plugins / Connectors ═══════════ */
+/* ═══════════ Plugins / Connectors (inside Settings) ═══════════ */
 function showPlugins() {
   const saved = JSON.parse(localStorage.getItem('krait-plugins') || '{}');
   const box = $('plugins-list');
@@ -441,9 +511,7 @@ function showPlugins() {
     row.appendChild(t);
     box.appendChild(row);
   }
-  $('plugins-screen').classList.add('show');
 }
-$('plugins-close') && ($('plugins-close').onclick = () => $('plugins-screen').classList.remove('show'));
 
 function showConnectors() {
   const saved = JSON.parse(localStorage.getItem('krait-connectors') || '{}');
@@ -464,9 +532,7 @@ function showConnectors() {
     row.appendChild(b);
     box.appendChild(row);
   }
-  $('connectors-screen').classList.add('show');
 }
-$('connectors-close') && ($('connectors-close').onclick = () => $('connectors-screen').classList.remove('show'));
 
 /* ═══════════ Changes drawer (real git diff) ═══════════ */
 async function openChanges() {

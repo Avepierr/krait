@@ -12,7 +12,8 @@ const https = require('https');
 const http = require('http');
 
 class ToolSet {
-  constructor() {
+  constructor(baseDir) {
+    this.baseDir = baseDir || process.cwd();
     this._registry = {
       Read: { description: 'Read file contents', input_schema: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } } }, fn: this._read },
       Write: { description: 'Create or overwrite a file', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } }, fn: this._write },
@@ -22,6 +23,12 @@ class ToolSet {
       Grep: { description: 'Search file contents', input_schema: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' } } }, fn: this._grep },
       WebFetch: { description: 'Fetch a URL', input_schema: { type: 'object', properties: { url: { type: 'string' } } }, fn: this._webFetch },
     };
+  }
+
+  /** Resolve a user-supplied path against the project directory. */
+  _abs(p) {
+    if (!p) return this.baseDir;
+    return path.isAbsolute(p) ? p : path.resolve(this.baseDir, p);
   }
 
   list() {
@@ -37,14 +44,14 @@ class ToolSet {
     const tool = this._registry[name];
     if (!tool) return { error: `Unknown tool: ${name}` };
     try {
-      return await tool.fn(input || {});
+      return await tool.fn.call(this, input || {});
     } catch (err) {
       return { error: err.message };
     }
   }
 
   async _read(input) {
-    const p = path.resolve(input.path);
+    const p = this._abs(input.path);
     if (!fs.existsSync(p)) return { error: `File not found: ${input.path}` };
     const stat = fs.statSync(p);
     if (stat.size > 10 * 1024 * 1024) return { error: 'File too large (max 10 MB)' };
@@ -57,14 +64,14 @@ class ToolSet {
   }
 
   async _write(input) {
-    const p = path.resolve(input.path);
+    const p = this._abs(input.path);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, input.content || '', 'utf8');
     return { path: input.path, status: 'written' };
   }
 
   async _edit(input) {
-    const p = path.resolve(input.path);
+    const p = this._abs(input.path);
     if (!fs.existsSync(p)) return { error: `File not found: ${input.path}` };
     const content = fs.readFileSync(p, 'utf-8');
     const oldString = input.old_string;
@@ -90,35 +97,72 @@ class ToolSet {
   }
 
   async _glob(input) {
+    // Own implementation: walk the project dir, match pattern (supports **, *, ?)
     const pattern = input.pattern || '**/*';
-    const base = input.path ? path.resolve(input.path) : process.cwd();
-    const { globSync } = require('glob').length > 0 ? require('glob') : { globSync: (p) => { return []; } };
-    let results;
-    try {
-      const glob = require('glob');
-      results = glob.globSync || glob.sync || glob;
-      if (typeof results !== 'function') results = (p) => [];
-      const files = results(pattern, { cwd: base, nodir: true });
-      return { files: files.slice(0, 100), count: files.length, truncated: files.length > 100 };
-    } catch {
-      return { files: [], error: 'glob not available' };
-    }
+    const base = this._abs(input.path);
+    if (!fs.existsSync(base)) return { error: `Path not found: ${input.path}` };
+    const results = [];
+    const walk = dir => {
+      if (results.length >= 500) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (results.length >= 500) return;
+        const full = path.join(dir, e.name);
+        const rel = path.relative(base, full).split(path.sep).join('/');
+        if (e.isDirectory()) {
+          if (['node_modules', '.git', 'dist', 'out', '.next'].includes(e.name)) continue;
+          walk(full);
+        } else if (matchPattern(rel, pattern)) {
+          results.push(rel);
+        }
+      }
+    };
+    walk(base);
+    return { files: results, count: results.length, truncated: results.length >= 500 };
   }
 
   async _grep(input) {
+    // Own implementation: recursive scan, works on Windows without external grep
     const pattern = input.pattern;
     if (!pattern) return { error: 'No pattern provided' };
-    const base = input.path ? path.resolve(input.path) : process.cwd();
-    try {
-      const ext = input.glob ? input.glob.replace('**/*', '').replace('*.', '.') : '';
-      const extFilter = ext ? `--include=${ext}` : '';
-      const output = execSync(`grep -rn ${extFilter} "${pattern}" "${base}"`, { encoding: 'utf8', timeout: 15000, maxBuffer: 5 * 1024 * 1024 });
-      const lines = output.split('\n').filter(Boolean);
-      return { matches: lines.slice(0, 100), count: lines.length, truncated: lines.length > 100 };
-    } catch (err) {
-      if (err.status === 1) return { matches: [], count: 0 };
-      return { error: err.message };
-    }
+    const base = this._abs(input.path);
+    if (!fs.existsSync(base)) return { error: `Path not found: ${input.path}` };
+    let rx;
+    try { rx = new RegExp(pattern, 'i'); } catch { rx = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    const globFilter = input.glob ? input.glob.split('/').pop() : null; // e.g. "*.js"
+    const matches = [];
+    let scanned = 0;
+    const walk = dir => {
+      if (matches.length >= 200 || scanned > 2000) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (matches.length >= 200 || scanned > 2000) return;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (['node_modules', '.git', 'dist', 'out'].includes(e.name)) continue;
+          walk(full);
+        } else {
+          if (globFilter && !matchPattern(e.name, globFilter)) continue;
+          scanned++;
+          let content;
+          try {
+            if (fs.statSync(full).size > 1024 * 1024) continue;
+            content = fs.readFileSync(full, 'utf8');
+          } catch { continue; }
+          const lines = content.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (rx.test(lines[i])) {
+              matches.push({ file: path.relative(this.baseDir, full), line: i + 1, text: lines[i].trim().slice(0, 200) });
+              if (matches.length >= 200) break;
+            }
+          }
+        }
+      }
+    };
+    walk(base);
+    return { matches, count: matches.length, truncated: matches.length >= 200 };
   }
 
   async _webFetch(input) {
@@ -137,3 +181,14 @@ class ToolSet {
 }
 
 module.exports = { ToolSet };
+
+/** Simple glob matching: ** = any depth, * = within segment, ? = one char. */
+function matchPattern(rel, pattern) {
+  const rx = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*\//g, '(?:.*/)?')
+    .replace(/\*\*/g, '.*')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]');
+  try { return new RegExp('^' + rx + '$').test(rel); } catch { return false; }
+}
