@@ -2,24 +2,27 @@
 const { app, BrowserWindow, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { exec } = require('child_process');
 const { Keychain } = require('./keychain');
-const { SessionStore } = require('./session');
+const { streamChat } = require('./chat');
 
 const DATA_DIR = path.join(os.homedir(), '.krait');
+const PROJECT_DIR = path.resolve(__dirname, '..', '..');
 let win = null;
+let currentAbort = null;
 
 function createWindow() {
-  const iconPath = path.join(__dirname, '..', '..', 'assets', 'icon.png');
-  const icon = nativeImage.createFromPath(iconPath);
+  const icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'icon.png'));
 
   win = new BrowserWindow({
-    width: 1280, height: 820, minWidth: 900, minHeight: 600,
+    width: 1280,
+    height: 820,
+    minWidth: 860,
+    minHeight: 560,
     icon,
     title: 'krait',
     frame: false,
     backgroundColor: '#0f0f0f',
-    titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -31,20 +34,64 @@ function createWindow() {
   if (process.platform === 'win32') app.setAppUserModelId('krait');
 }
 
-// ─── IPC handlers ───
+// ─── Keys ───
 ipcMain.handle('krait:has-key', (_, p) => new Keychain(DATA_DIR).has(p));
-ipcMain.handle('krait:save-key', (_, { p, k }) => { new Keychain(DATA_DIR).save(p, k); return true; });
-ipcMain.handle('krait:delete-key', (_, p) => { new Keychain(DATA_DIR).delete(p); return true; });
-ipcMain.handle('krait:get-masked-keys', () => new Keychain(DATA_DIR).list());
-ipcMain.handle('krait:terminal', (_, cmd) => {
-  try {
-    const out = execSync(cmd, { timeout: 30000, encoding: 'utf8', maxBuffer: 2*1024*1024 });
-    return { ok: true, stdout: out, stderr: '' };
-  } catch (err) { return { ok: false, stdout: err.stdout || '', stderr: err.stderr || err.message }; }
+ipcMain.handle('krait:save-key', (_, provider, key) => {
+  new Keychain(DATA_DIR).save(provider, key);
+  return true;
 });
-ipcMain.handle('krait:minimize', () => win?.minimize());
-ipcMain.handle('krait:maximize', () => { win?.isMaximized() ? win.unmaximize() : win?.maximize(); });
-ipcMain.handle('krait:close', () => win?.close());
+ipcMain.handle('krait:delete-key', (_, p) => {
+  new Keychain(DATA_DIR).delete(p);
+  return true;
+});
+ipcMain.handle('krait:get-masked-keys', () => new Keychain(DATA_DIR).list());
 
-app.on('window-all-closed', () => {});
+// ─── Chat (real, streaming) ───
+ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
+  currentAbort = new AbortController();
+  let full = '';
+  try {
+    full = await streamChat(modelId, messages || [], delta => {
+      if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
+    }, currentAbort.signal, opts || {});
+    return { text: full };
+  } catch (err) {
+    if (err && err.name === 'AbortError') return { text: full, aborted: true };
+    return { error: String((err && err.message) || err) };
+  } finally {
+    currentAbort = null;
+  }
+});
+
+ipcMain.handle('krait:abort', () => {
+  if (currentAbort) currentAbort.abort();
+  return true;
+});
+
+// ─── Terminal (async so the window never freezes) ───
+ipcMain.handle('krait:terminal', (_, cmd) => {
+  return new Promise(resolve => {
+    exec(cmd, {
+      cwd: PROJECT_DIR,
+      timeout: 30000,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    }, (err, stdout, stderr) => {
+      resolve({ ok: !err, stdout: stdout || '', stderr: stderr || (err ? String(err.message) : '') });
+    });
+  });
+});
+
+// ─── Window controls ───
+ipcMain.handle('krait:minimize', () => win && win.minimize());
+ipcMain.handle('krait:maximize', () => {
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize(); else win.maximize();
+});
+ipcMain.handle('krait:close', () => win && win.close());
+
+app.on('window-all-closed', () => {
+  app.quit();
+});
+
 app.whenReady().then(createWindow);

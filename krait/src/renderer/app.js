@@ -1,262 +1,232 @@
 'use strict';
+/* krait renderer — real streaming chat, key screen, terminal. */
 
-/* ═══════════ krait — Full Code View UI ═══════════ */
+const $ = id => document.getElementById(id);
+const K = { model: '', messages: [], streaming: false };
+let currentAssistant = null;
 
-const K = { messages: [], sessionId: null, model: null, streaming: false, abort: null };
+const SNAKE =
+  '<svg viewBox="0 0 4 4" width="26" height="26" shape-rendering="crispEdges">' +
+  '<rect x="0" y="0" width="1" height="1" fill="#00D68F"/><rect x="1" y="0" width="1" height="1" fill="#111"/>' +
+  '<rect x="2" y="0" width="1" height="1" fill="#00D68F"/><rect x="3" y="0" width="1" height="1" fill="#111"/>' +
+  '<rect x="0" y="1" width="1" height="1" fill="#111"/><rect x="1" y="1" width="1" height="1" fill="#00D68F"/>' +
+  '<rect x="2" y="1" width="1" height="1" fill="#111"/><rect x="3" y="1" width="1" height="1" fill="#00D68F"/>' +
+  '<rect x="0" y="2" width="1" height="1" fill="#00D68F"/><rect x="1" y="2" width="1" height="1" fill="#111"/>' +
+  '<rect x="2" y="2" width="1" height="1" fill="#00D68F"/><rect x="3" y="2" width="1" height="1" fill="#111"/>' +
+  '<rect x="1" y="3" width="1" height="1" fill="#00D68F"/></svg>';
 
-function $(id) { return document.getElementById(id); }
-function qs(s, p) { return (p||document).querySelector(s); }
-function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+document.addEventListener('DOMContentLoaded', init);
 
-/* ═══ Init ═══ */
-document.addEventListener('DOMContentLoaded', async () => {
-  // Load icon
-  $('title-icon').src = ''; $('key-icon').src = '';
-  // Try to resolve icon via preload
-  try { $('title-icon').src = '../../assets/icon.png'; $('key-icon').src = '../../assets/icon.png'; } catch {}
+async function init() {
+  // window controls
+  $('btn-min').onclick = () => window.krait && window.krait.minimize();
+  $('btn-max').onclick = () => window.krait && window.krait.maximize();
+  $('btn-close').onclick = () => window.krait && window.krait.close();
+  $('btn-settings').onclick = openKeys;
+  $('key-close').onclick = closeKeys;
+  $('btn-terminal').onclick = () => $('terminal').classList.toggle('hidden');
+  $('btn-new').onclick = () => { K.messages = []; renderWelcome(); };
 
-  // Get keys
-  let hasKeys = false;
-  if (window.krait) {
-    const keys = await window.krait.getMaskedKeys();
-    hasKeys = Object.keys(keys).length > 0;
-  }
-  if (!hasKeys) $('key-overlay').classList.add('active');
-
-  // Key form
-  $('key-form').addEventListener('submit', async e => {
-    e.preventDefault();
-    if (!window.krait) return;
-    for (const p of ['gemini','openrouter','nvidia','anthropic']) {
-      const el = $('k-' + p);
-      if (el && el.value.trim()) await window.krait.saveKey(p, el.value.trim());
-    }
-    $('key-overlay').classList.remove('active');
-    populateModelList();
-  });
-
-  // Titlebar controls
-  ['tb-minimize','tb-maximize','tb-close'].forEach(id => {
-    const el = $(id); if (!el) return;
-    el.addEventListener('click', () => {
-      if (id === 'tb-minimize') window.krait?.minimize();
-      else if (id === 'tb-maximize') window.krait?.maximize();
-      else window.krait?.close();
-    });
-  });
-
-  // New session
-  $('new-session-btn').addEventListener('click', newSession);
-
-  // Send
-  $('send-btn').addEventListener('click', send);
-  $('prompt-area').addEventListener('keydown', e => {
+  // composer
+  const prompt = $('prompt');
+  prompt.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    if (e.key === 'Escape') stopStream();
   });
-  $('stop-btn').addEventListener('click', stopStream);
-
-  // Attach
-  $('attach-btn').addEventListener('click', () => {
-    const inp = document.createElement('input');
-    inp.type = 'file'; inp.multiple = true;
-    inp.onchange = () => { for (const f of inp.files) addAttachment(f.name); };
-    inp.click();
+  prompt.addEventListener('input', () => {
+    prompt.style.height = 'auto';
+    prompt.style.height = Math.min(prompt.scrollHeight, 200) + 'px';
   });
+  $('btn-send').onclick = send;
+  $('btn-stop').onclick = () => window.krait && window.krait.abortChat();
 
-  // Mode select
-  $('mode-select').addEventListener('change', () => {
-    $('mode-chip').textContent = $('mode-select').value;
-    K.mode = $('mode-select').value;
-  });
-
-  // Effort select
-  $('effort-select').addEventListener('change', () => {
-    $('effort-chip').textContent = $('effort-select').value;
-  });
-
-  // Thinking toggle
-  $('thinking-toggle').addEventListener('click', () => {
-    $('thinking-toggle').classList.toggle('active');
-    $('thinking-toggle').style.borderColor = $('thinking-toggle').classList.contains('active') ? 'var(--accent)' : '';
-  });
-
-  // Right panel tabs
-  document.querySelectorAll('.tab').forEach(t => {
-    t.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      const tab = $('tab-' + t.dataset.tab);
-      if (tab) tab.classList.add('active');
-    });
-  });
-
-  // Terminal input
-  $('term-input').addEventListener('keydown', async e => {
+  // terminal
+  $('term-in').addEventListener('keydown', async e => {
     if (e.key !== 'Enter') return;
-    const cmd = $('term-input').value.trim();
+    const cmd = $('term-in').value.trim();
     if (!cmd) return;
-    $('term-input').value = '';
-    appendTerm('$ ' + cmd);
-    try {
-      if (window.krait) {
-        const r = await window.krait.runTerminal(cmd);
-        appendTerm(r.stdout || r.stderr || 'Done');
-      } else {
-        appendTerm('No terminal bridge available');
-      }
-    } catch (err) {
-      appendTerm('Error: ' + err.message);
-    }
+    $('term-in').value = '';
+    termPrint('$ ' + cmd);
+    if (!window.krait) { termPrint('(only works inside the app)'); return; }
+    const r = await window.krait.runTerminal(cmd);
+    termPrint(r.stdout || r.stderr || '(no output)');
   });
 
-  // Populate models
-  populateModelList();
-});
+  // keys
+  $('key-form').onsubmit = saveKeys;
+  const keys = window.krait ? await window.krait.getMaskedKeys() : {};
+  if (Object.keys(keys).length === 0) openKeys(); else closeKeys();
+  fillModelSelect(keys);
 
-/* ═══ Send ═══ */
-function send() {
-  if (K.streaming) return;
-  const area = $('prompt-area');
-  const text = area.innerText.trim();
-  if (!text) return;
-  area.innerText = '';
-  K.messages.push({ role: 'user', content: text });
-  addMsg('user', text);
-  K.streaming = true;
-  $('send-btn').style.display = 'none';
-  $('stop-btn').style.display = '';
+  // streaming deltas from the main process
+  if (window.krait) window.krait.onDelta(appendDelta);
 
-  // Send to backend (pretend/harness)
-  const model = K.model || ($('model-select') ? $('model-select').value : '') || 'openrouter/meta-llama/llama-3.1-8b';
-  const msgEl = addMsg('assistant', '⌛');
-  // Simulate streaming (replace with real fetch later)
-  let i = 0;
-  K.abort = new AbortController();
-  const fakeReplies = [
-    "I'll work on that for you.",
-    "\n\nLet me look at the code...",
-    "\n\nThe file has some interesting patterns.\n\nHere's what I found..."
-  ];
-  const interval = setInterval(() => {
-    if (K.streaming === false || i >= fakeReplies.length) {
-      clearInterval(interval);
-      doneStreaming(msgEl, "Done! I've analyzed the project for you. The main structure is in `src/renderer/app.js` and `src/engine/harness.js`. What would you like to do next?");
-      return;
+  renderWelcome();
+}
+
+/* ── Model list (only providers with a saved key) ── */
+function fillModelSelect(keys) {
+  const sel = $('model-select');
+  sel.innerHTML = '';
+  const groups = {
+    openrouter: [
+      ['meta-llama/llama-3.3-70b-instruct', 'Llama 3.3 70B'],
+      ['deepseek/deepseek-chat', 'DeepSeek V3'],
+      ['qwen/qwen-2.5-72b-instruct', 'Qwen 2.5 72B'],
+      ['anthropic/claude-sonnet-4', 'Claude Sonnet 4'],
+    ],
+    gemini: [
+      ['gemini-2.0-flash', 'Gemini 2.0 Flash'],
+      ['gemini-2.5-flash', 'Gemini 2.5 Flash'],
+    ],
+    nvidia: [
+      ['meta/llama-3.1-70b-instruct', 'Llama 3.1 70B'],
+      ['mistralai/mistral-small-24b-instruct', 'Mistral Small 24B'],
+    ],
+    anthropic: [
+      ['claude-sonnet-4-20250514', 'Claude Sonnet 4'],
+      ['claude-opus-4-20250514', 'Claude Opus 4'],
+    ],
+  };
+
+  let any = false;
+  for (const [ns, models] of Object.entries(groups)) {
+    if (!keys[ns]) continue;
+    any = true;
+    const og = document.createElement('optgroup');
+    og.label = ns;
+    for (const [id, name] of models) {
+      const o = document.createElement('option');
+      o.value = ns + '/' + id;
+      o.textContent = name;
+      og.appendChild(o);
     }
-    msgEl.querySelector('.msg-text').textContent = fakeReplies.slice(0, i+1).join('');
-    i++;
-  }, 800);
+    sel.appendChild(og);
+  }
+
+  if (!any) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = 'Add a key first (gear icon)';
+    sel.appendChild(o);
+    sel.disabled = true;
+    K.model = '';
+    return;
+  }
+
+  sel.disabled = false;
+  sel.selectedIndex = 0;
+  K.model = sel.value;
+  sel.onchange = () => { K.model = sel.value; };
 }
 
-function doneStreaming(el, finalText) {
-  K.streaming = false;
-  $('send-btn').style.display = '';
-  $('stop-btn').style.display = 'none';
-  if (!el) return;
-  el.querySelector('.msg-text').textContent = finalText;
-  K.messages.push({ role: 'assistant', content: finalText });
-  $('messages').scrollTop = $('messages').scrollHeight;
+/* ── Key screen ── */
+function openKeys() { $('key-screen').classList.add('show'); }
+function closeKeys() { $('key-screen').classList.remove('show'); }
+
+async function saveKeys(e) {
+  e.preventDefault();
+  if (!window.krait) return;
+  for (const p of ['gemini', 'openrouter', 'nvidia', 'anthropic']) {
+    const el = $('k-' + p);
+    if (el && el.value.trim()) {
+      await window.krait.saveKey(p, el.value.trim());
+      el.value = '';
+    }
+  }
+  const keys = await window.krait.getMaskedKeys();
+  $('key-saved').textContent = 'Saved: ' + (Object.keys(keys).join(', ') || 'none');
+  if (Object.keys(keys).length) {
+    fillModelSelect(keys);
+    setTimeout(closeKeys, 600);
+  }
 }
 
-function stopStream() {
-  K.streaming = false;
-  $('send-btn').style.display = '';
-  $('stop-btn').style.display = 'none';
+/* ── Chat ── */
+function renderWelcome() {
+  $('messages').innerHTML =
+    '<div class="welcome"><img class="welcome-icon" src="../../assets/icon.png" alt="">' +
+    '<h2>krait</h2><p>Pick a model above, then ask anything.<br>' +
+    'Your keys are encrypted and stay on this PC.</p></div>';
 }
 
-/* ═══ Messages ═══ */
-function addMsg(role, content) {
-  const c = $('messages');
+function scrollDown() {
+  const m = $('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+function addMsg(role, text) {
+  const w = document.querySelector('.welcome');
+  if (w) w.remove();
   const el = document.createElement('div');
-  el.className = 'msg msg-' + role;
-  const isUser = role === 'user';
-  const avatar = isUser
-    ? '<div class="msg-avatar"><svg viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="var(--accent)"/><text x="14" y="19" text-anchor="middle" fill="#000" font-size="16" font-weight="700">U</text></svg></div>'
-    : '<div class="msg-avatar"><svg viewBox="0 0 28 28"><rect x="0" y="0" width="7" height="7" fill="#222"/><rect x="7" y="0" width="7" height="7" fill="#00D68F"/><rect x="14" y="0" width="7" height="7" fill="#222"/><rect x="0" y="7" width="7" height="7" fill="#00D68F"/><rect x="7" y="7" width="7" height="7" fill="#222"/><rect x="14" y="7" width="7" height="7" fill="#00D68F"/><rect x="0" y="14" width="7" height="7" fill="#222"/><rect x="7" y="14" width="7" height="7" fill="#00D68F"/><rect x="14" y="14" width="7" height="7" fill="#222"/><rect x="0" y="21" width="7" height="7" fill="#222"/><rect x="7" y="21" width="7" height="7" fill="#00D68F"/><rect x="14" y="21" width="7" height="7" fill="#222"/><rect x="21" y="0" width="7" height="7" fill="#00D68F"/><rect x="21" y="7" width="7" height="7" fill="#222"/><rect x="21" y="14" width="7" height="7" fill="#00D68F"/></svg></div>';
-  el.innerHTML = '<div class="msg-head">' + avatar + '<div><div class="msg-name">' + (isUser ? 'You' : 'krait') + '</div></div></div><div class="msg-text">' + esc(content) + '</div>';
-  c.appendChild(el);
-  c.scrollTop = c.scrollHeight;
+  el.className = 'msg ' + role;
+  const who = role === 'user' ? 'You' : 'krait';
+  const avatar = role === 'user'
+    ? '<div class="avatar user">U</div>'
+    : '<div class="avatar bot">' + SNAKE + '</div>';
+  el.innerHTML = avatar + '<div class="bubble"><div class="who">' + who +
+    '</div><div class="text"></div></div>';
+  el.querySelector('.text').textContent = text || '';
+  $('messages').appendChild(el);
+  scrollDown();
   return el;
 }
 
-/* ═══ Attachments ═══ */
-function addAttachment(name) {
-  const chips = $('composer-chips');
-  const chip = document.createElement('span');
-  chip.className = 'chip';
-  chip.style.cssText = 'background:var(--bg4);color:var(--fg);';
-  chip.textContent = '📄 ' + name + ' ×';
-  chip.onclick = () => chip.remove();
-  chips.appendChild(chip);
+function appendDelta(d) {
+  if (!currentAssistant) return;
+  const t = currentAssistant.querySelector('.text');
+  if (t.textContent === '...') t.textContent = '';
+  t.textContent += d;
+  scrollDown();
 }
 
-/* ═══ Terminal ═══ */
-function appendTerm(text) {
-  const out = $('terminal-out');
-  out.textContent += text + '\n';
-  out.scrollTop = out.scrollHeight;
-}
+async function send() {
+  if (K.streaming) return;
+  const prompt = $('prompt');
+  const text = prompt.value.trim();
+  if (!text) return;
 
-/* ═══ Sessions ═══ */
-function newSession() {
-  K.messages = []; K.sessionId = null;
-  $('messages').innerHTML = '';
-  $('session-title').textContent = 'Code';
-}
+  if (!K.model) {
+    addMsg('assistant', 'No model yet. Click the gear in the title bar, add an API key, then pick a model.');
+    return;
+  }
 
-/* ═══ Model picker ═══ */
-function populateModelList() {
-  const tab = $('tab-model-picker');
-  if (!tab) return;
-  const providers = [
-    {
-      name: 'OpenRouter',
-      models: [
-        { id: 'openrouter/meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', desc: 'Strong general model' },
-        { id: 'openrouter/mistralai/mixtral-8x22b', name: 'Mixtral 8x22B', desc: 'Fast & powerful' },
-        { id: 'openrouter/qwen/qwen-2.5-72b-instruct', name: 'Qwen 2.5 72B', desc: 'Strong open model' },
-      ]
-    },
-    {
-      name: 'Gemini',
-      models: [
-        { id: 'gemini/gemini-2.0-flash', name: 'Gemini 2.0 Flash', desc: 'Fast, free tier' },
-        { id: 'gemini/gemini-2.0-pro', name: 'Gemini 2.0 Pro', desc: 'Most capable Gemini' },
-      ]
-    },
-    {
-      name: 'NVIDIA',
-      models: [
-        { id: 'nvidia/llama-3.1-nemotron-70b', name: 'Nemotron 70B', desc: 'Reasoning tuned' },
-      ]
-    },
-    {
-      name: 'Anthropic',
-      models: [
-        { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', desc: 'Best for coding' },
-        { id: 'anthropic/claude-opus-4', name: 'Claude Opus 4', desc: 'Most capable Claude' },
-      ]
-    },
-  ];
-  tab.innerHTML = providers.map(g => `
-    <div class="model-group">
-      <div class="model-group-name">${g.name}</div>
-      ${g.models.map(m => `
-        <div class="model-item${K.model === m.id ? ' active' : ''}" data-id="${m.id}">
-          <div class="model-name">${m.name}</div>
-          <div class="model-desc">${m.desc}</div>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-  tab.querySelectorAll('.model-item').forEach(el => {
-    el.addEventListener('click', () => {
-      tab.querySelectorAll('.model-item').forEach(x => x.classList.remove('active'));
-      el.classList.add('active');
-      K.model = el.dataset.id;
-      $('model-select').innerHTML = `<option value="${K.model}">${el.querySelector('.model-name').textContent}</option>`;
+  prompt.value = '';
+  prompt.style.height = 'auto';
+  addMsg('user', text);
+  K.messages.push({ role: 'user', content: text });
+
+  K.streaming = true;
+  $('btn-send').style.display = 'none';
+  $('btn-stop').style.display = '';
+  currentAssistant = addMsg('assistant', '...');
+
+  try {
+    const res = await window.krait.chat(K.model, K.messages, {
+      mode: $('mode-select').value,
+      effort: $('effort-select').value,
     });
-  });
+    const t = currentAssistant.querySelector('.text');
+    if (res.error) {
+      t.textContent = 'Error: ' + res.error;
+    } else {
+      t.textContent = res.text || '(empty reply)';
+      if (res.aborted) t.textContent += '  (stopped)';
+      K.messages.push({ role: 'assistant', content: res.text || '' });
+    }
+  } catch (err) {
+    currentAssistant.querySelector('.text').textContent = 'Error: ' + err.message;
+  }
+
+  K.streaming = false;
+  $('btn-send').style.display = '';
+  $('btn-stop').style.display = 'none';
+  currentAssistant = null;
+  scrollDown();
+}
+
+/* ── Terminal ── */
+function termPrint(t) {
+  const o = $('term-out');
+  o.textContent += t + '\n';
+  o.scrollTop = o.scrollHeight;
 }

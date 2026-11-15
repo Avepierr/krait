@@ -1,0 +1,160 @@
+'use strict';
+/**
+ * chat.js — real model calls with streaming, for the desktop window.
+ * Model ids look like "openrouter/meta-llama/llama-3.3-70b-instruct",
+ * "gemini/gemini-2.0-flash", "nvidia/meta/llama-3.1-70b-instruct",
+ * "anthropic/claude-sonnet-4-20250514".
+ * Keys come from the encrypted Keychain (~/.krait/keys).
+ */
+
+const path = require('path');
+const os = require('os');
+const { Keychain } = require('./keychain');
+
+function keychain() {
+  return new Keychain(path.join(os.homedir(), '.krait'));
+}
+
+function splitModel(modelId) {
+  const i = modelId.indexOf('/');
+  if (i < 0) return { ns: '', model: modelId };
+  return { ns: modelId.slice(0, i), model: modelId.slice(i + 1) };
+}
+
+function buildSystem(opts) {
+  let sys = 'You are krait, a helpful coding assistant. Be direct and concise.';
+  if (opts && opts.effort && opts.effort !== 'normal') {
+    sys += '\nReasoning effort: ' + opts.effort + ' (think as deeply as this level suggests).';
+  }
+  if (opts && opts.mode && opts.mode !== 'normal') {
+    sys += '\nMode: ' + opts.mode + '.';
+  }
+  return sys;
+}
+
+/**
+ * Stream a chat completion. Calls onDelta(textChunk) as words arrive.
+ * Returns the full text. Throws Error with a friendly message on failure.
+ */
+async function streamChat(modelId, messages, onDelta, signal, opts) {
+  const { ns, model } = splitModel(modelId);
+  const key = keychain().get(ns);
+  if (!key) throw new Error('No API key saved for ' + ns + '. Click the gear in the title bar to add one.');
+  if (!model) throw new Error('No model selected.');
+
+  const sys = buildSystem(opts);
+  const clean = messages
+    .filter(m => m && m.role !== 'system' && m.content)
+    .map(m => ({ role: m.role, content: String(m.content) }));
+
+  let url, headers, body;
+
+  if (ns === 'gemini') {
+    url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model +
+      ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(key);
+    headers = { 'Content-Type': 'application/json' };
+    body = {
+      systemInstruction: { parts: [{ text: sys }] },
+      contents: clean.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      })),
+    };
+  } else if (ns === 'anthropic') {
+    url = 'https://api.anthropic.com/v1/messages';
+    headers = {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+    };
+    body = {
+      model,
+      max_tokens: 4096,
+      stream: true,
+      system: sys,
+      messages: clean.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+    };
+  } else if (ns === 'openrouter' || ns === 'nvidia') {
+    const base = ns === 'openrouter'
+      ? 'https://openrouter.ai/api/v1'
+      : 'https://integrate.api.nvidia.com/v1';
+    url = base + '/chat/completions';
+    headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key };
+    if (ns === 'openrouter') headers['HTTP-Referer'] = 'https://krait.local';
+    body = {
+      model,
+      stream: true,
+      max_tokens: 4096,
+      messages: [{ role: 'system', content: sys }, ...clean],
+    };
+  } else {
+    throw new Error('Unknown provider "' + ns + '".');
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try {
+      const j = await res.json();
+      msg = (j.error && (j.error.message || j.error.msg)) || j.message || JSON.stringify(j).slice(0, 300);
+    } catch {}
+    throw new Error(ns + ': ' + msg);
+  }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let full = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let j;
+      try { j = JSON.parse(payload); } catch { continue; }
+      if (j.error) throw new Error((j.error.message || 'stream error') + '');
+      if (j.type === 'error') throw new Error((j.error && j.error.message) || 'stream error');
+      const delta = extractDelta(ns, j);
+      if (delta) {
+        full += delta;
+        if (onDelta) onDelta(delta);
+      }
+    }
+  }
+
+  if (!full.trim()) throw new Error(ns + ' returned an empty reply (check your key and model).');
+  return full;
+}
+
+function extractDelta(ns, j) {
+  if (ns === 'gemini') {
+    const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+    return parts.map(p => p.text || '').join('');
+  }
+  if (ns === 'anthropic') {
+    if (j.type === 'content_block_delta' && j.delta) return j.delta.text || '';
+    return '';
+  }
+  const c = j.choices && j.choices[0];
+  return (c && c.delta && c.delta.content) || '';
+}
+
+/** One-shot helper (no UI) for tests and the CLI. */
+async function chatOnce(modelId, messages, opts) {
+  return streamChat(modelId, messages, null, undefined, opts);
+}
+
+module.exports = { streamChat, chatOnce, splitModel };
