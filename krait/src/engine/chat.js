@@ -11,6 +11,10 @@ const path = require('path');
 const os = require('os');
 const { Keychain } = require('./keychain');
 
+// Maps the UI effort level to each provider's thinking knob.
+const REASONING_EFFORT = { low: 'low', medium: 'medium', high: 'high', max: 'high', ultra: 'high', normal: 'medium' };
+const THINK_BUDGET = { low: 1024, medium: 2048, high: 4096, max: 8192, ultra: 8192, normal: 2048 };
+
 function keychain() {
   return new Keychain(path.join(os.homedir(), '.krait'));
 }
@@ -106,7 +110,13 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       systemInstruction: { parts: [{ text: sys }] },
       contents: clean.map(m => buildMessage('gemini', m)),
     };
+    // Gemini 2.5+ can expose its thoughts
+    if (/2\.5|3\b/.test(model)) {
+      body.generationConfig = { thinkingConfig: { includeThoughts: true } };
+    }
   } else if (ns === 'anthropic') {
+    // thinking needs budget_tokens >= 1024 and max_tokens > budget
+    const budget = THINK_BUDGET[(opts && opts.effort) || 'medium'] || 2048;
     url = 'https://api.anthropic.com/v1/messages';
     headers = {
       'Content-Type': 'application/json',
@@ -115,8 +125,9 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     };
     body = {
       model,
-      max_tokens: 4096,
+      max_tokens: budget + 4096,
       stream: true,
+      thinking: { type: 'enabled', budget_tokens: budget },
       system: sys,
       messages: clean.map(m => buildMessage('anthropic', m)),
     };
@@ -134,6 +145,10 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       stream_options: { include_usage: true },
       messages: [{ role: 'system', content: sys }, ...clean.map(m => buildMessage(ns, m))],
     };
+    // OpenRouter unified reasoning param — models that don't support it just ignore it
+    if (ns === 'openrouter' && (!opts || opts.thinking !== false)) {
+      body.reasoning = { effort: REASONING_EFFORT[(opts && opts.effort) || 'medium'] || 'medium' };
+    }
   } else {
     throw new Error('Unknown provider "' + ns + '".');
   }
@@ -158,7 +173,9 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
   const dec = new TextDecoder();
   let buf = '';
   let full = '';
+  let think = '';
   let usage = null;
+  const onThinking = (opts && opts.onThinking) || null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -175,6 +192,11 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       try { j = JSON.parse(payload); } catch { continue; }
       if (j.error) throw new Error((j.error.message || 'stream error') + '');
       if (j.type === 'error') throw new Error((j.error && j.error.message) || 'stream error');
+      const td = extractThinking(ns, j);
+      if (td) {
+        think += td;
+        if (onThinking) onThinking(td);
+      }
       const delta = extractDelta(ns, j);
       if (delta) {
         full += delta;
@@ -185,9 +207,9 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
     }
   }
 
-  if (!full.trim()) throw new Error(ns + ' returned an empty reply (check your key and model).');
-  if (!usage) usage = estimateUsage(sys, clean, full);
-  return { text: full, usage };
+  if (!full.trim() && !think.trim()) throw new Error(ns + ' returned an empty reply (check your key and model).');
+  if (!usage) usage = estimateUsage(sys, clean, full + think);
+  return { text: full, usage, thinking: think };
 }
 
 function extractUsage(ns, j) {
@@ -226,14 +248,31 @@ function estimateUsage(sys, messages, reply) {
 function extractDelta(ns, j) {
   if (ns === 'gemini') {
     const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
-    return parts.map(p => p.text || '').join('');
+    // p.thought === true marks thinking text — keep it out of the answer
+    return parts.filter(p => !p.thought).map(p => p.text || '').join('');
   }
   if (ns === 'anthropic') {
-    if (j.type === 'content_block_delta' && j.delta) return j.delta.text || '';
+    if (j.type === 'content_block_delta' && j.delta && j.delta.type !== 'thinking_delta') return j.delta.text || '';
     return '';
   }
   const c = j.choices && j.choices[0];
   return (c && c.delta && c.delta.content) || '';
+}
+
+/** Reasoning/thinking text deltas, separate from the answer. */
+function extractThinking(ns, j) {
+  if (ns === 'gemini') {
+    const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+    return parts.filter(p => p.thought).map(p => p.text || '').join('');
+  }
+  if (ns === 'anthropic') {
+    if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'thinking_delta') return j.delta.thinking || '';
+    return '';
+  }
+  // OpenAI-compatible: reasoning lives next to content on the delta
+  const d = j.choices && j.choices[0] && j.choices[0].delta;
+  if (!d) return '';
+  return d.reasoning || d.reasoning_content || '';
 }
 
 /** One-shot helper (no UI) for tests and the CLI. */

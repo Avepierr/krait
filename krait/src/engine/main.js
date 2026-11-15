@@ -86,6 +86,9 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
   currentAbort = new AbortController();
   const ns = String(modelId).split('/')[0];
   const o = opts || {};
+  o.onThinking = d => {
+    if (!event.sender.isDestroyed()) event.sender.send('krait:thinking', d);
+  };
   let final = { text: '', usage: null };
 
   try {

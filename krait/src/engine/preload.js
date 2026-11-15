@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('krait', {
   chat: (model, messages, opts) => ipcRenderer.invoke('krait:chat', model, messages, opts),
   abortChat: () => ipcRenderer.invoke('krait:abort'),
   onDelta: cb => ipcRenderer.on('krait:delta', (_, d) => cb(d)),
+  onThinking: cb => ipcRenderer.on('krait:thinking', (_, d) => cb(d)),
 
   createSession: name => ipcRenderer.invoke('krait:sessions-create', name),
   appendSession: (id, m) => ipcRenderer.invoke('krait:sessions-append', id, m),

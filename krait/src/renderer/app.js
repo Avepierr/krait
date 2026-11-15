@@ -70,6 +70,9 @@ async function init() {
   $('btn-max').onclick = () => window.krait && window.krait.maximize();
   $('btn-close').onclick = () => window.krait && window.krait.close();
   $('btn-settings').onclick = () => showSettings('account');
+  // clicking the krait logo opens Settings (Account)
+  $('brand-icon').onclick = () => showSettings('account');
+  document.querySelector('.tb-name').onclick = () => showSettings('account');
   $('key-close').onclick = closeKeys;
   $('btn-mcp').onclick = () => showSettings('mcp');
   $('btn-terminal').onclick = () => $('terminal').classList.toggle('hidden');
@@ -186,6 +189,7 @@ async function init() {
   if (window.krait) {
     K.memory = await window.krait.projectMemory();
     window.krait.onDelta(appendDelta);
+    window.krait.onThinking(onThinkingDelta);
     window.krait.onTool(info => {
       if (currentAssistant) {
         const el = document.createElement('div');
@@ -323,6 +327,7 @@ function addNotice(html) {
 
 function appendDelta(d) {
   if (!currentAssistant) return;
+  if (thoughtEl) finishThought(); // answer started → collapse the thought block
   const t = currentAssistant.querySelector('.text');
   if (!t.dataset.raw) t.dataset.raw = '';
   t.dataset.raw += d;
@@ -341,6 +346,65 @@ function cleanStream(raw) {
   s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, '\u2699 using tool...');
   s = s.replace(/^\s*tool\s*$/mg, '');
   return s;
+}
+
+/* ═══════════ Thoughts (reasoning shown like Claude's "Thought 4s") ═══════════ */
+let thoughtEl = null;      // current collapsible block
+let thoughtText = '';      // accumulated reasoning for this turn
+let thoughtTimer = null;   // live duration updater
+
+/** Called for every reasoning chunk from the model. */
+function onThinkingDelta(d) {
+  if (!d) return;
+  thoughtText += d;
+  if (!thoughtEl) {
+    // first thinking chunk → create the block above the answer
+    thoughtEl = document.createElement('div');
+    thoughtEl.className = 'thought open';
+    thoughtEl.innerHTML =
+      '<button class="th-head"><span class="th-ic">&#9733;</span><span class="th-label">Thinking</span>' +
+      '<span class="th-time">0s</span><span class="th-caret">&#9662;</span></button>' +
+      '<div class="th-body"></div>';
+    thoughtEl.querySelector('.th-head').onclick = () => thoughtEl.classList.toggle('open');
+    $('messages').appendChild(thoughtEl);
+    thoughtTimer = setInterval(() => {
+      const t = thoughtEl && thoughtEl.querySelector('.th-time');
+      if (t) t.textContent = Math.round((Date.now() - K.thinkStart) / 1000) + 's';
+    }, 500);
+    K.thinkStart = Date.now();
+    scrollDown();
+  }
+  const body = thoughtEl.querySelector('.th-body');
+  body.textContent = thoughtText.length > 20000
+    ? '\u2026' + thoughtText.slice(-20000)
+    : thoughtText;
+  body.scrollTop = body.scrollHeight;
+  scrollDown();
+}
+
+/** First answer chunk arrived → stop the timer, set the final label, collapse. */
+function finishThought() {
+  if (!thoughtEl) return;
+  clearInterval(thoughtTimer);
+  thoughtTimer = null;
+  const secs = K.thinkStart ? Math.max(1, Math.round((Date.now() - K.thinkStart) / 1000)) : 0;
+  const label = thoughtEl.querySelector('.th-label');
+  if (label) label.textContent = 'Thought ' + (secs >= 60
+    ? Math.floor(secs / 60) + 'm ' + (secs % 60) + 's'
+    : secs + 's');
+  const time = thoughtEl.querySelector('.th-time');
+  if (time) time.textContent = '';
+  thoughtEl.classList.remove('open');
+  thoughtEl = null;
+  K.thinkStart = 0;
+}
+
+/** Reset per-turn thought state (new send). */
+function resetThought() {
+  if (thoughtTimer) { clearInterval(thoughtTimer); thoughtTimer = null; }
+  thoughtEl = null;
+  thoughtText = '';
+  K.thinkStart = 0;
 }
 
 function addArtifact(bubbleEl, path) {
@@ -433,6 +497,7 @@ async function send() {
   K.streaming = true;
   $('btn-send').style.display = 'none';
   $('btn-stop').style.display = '';
+  resetThought();
   currentAssistant = addMsg('assistant', '');
   currentAssistant.querySelector('.text').innerHTML = '<span class="typing">...</span>';
 
@@ -465,6 +530,7 @@ async function send() {
     currentAssistant.querySelector('.text').textContent = 'Error: ' + err.message;
   }
 
+  finishThought(); // in case the model thought but never streamed an answer
   K.streaming = false;
   $('btn-send').style.display = '';
   $('btn-stop').style.display = 'none';
@@ -872,6 +938,7 @@ function showConnectors() {
 function fillModelSelect(keys) {
   const sel = $('model-select');
   sel.innerHTML = '';
+  const groups = {
     openrouter: [
       ['nvidia/nemotron-3-ultra-550b-a55b:free', 'Nemotron 3 Ultra 550B (free)', false],
       ['google/gemma-4-31b-it:free', 'Gemma 4 31B (free)', true],
