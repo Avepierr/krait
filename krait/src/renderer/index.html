@@ -14,6 +14,7 @@
   </div>
   <div class="tb-drag"></div>
   <div class="tb-right">
+    <button id="btn-changes" class="tb-btn" title="Changes (git diff)">&#9663; Changes</button>
     <button id="btn-terminal" class="tb-btn" title="Terminal">&gt;_</button>
     <button id="btn-settings" class="tb-btn" title="API keys">&#9881;</button>
     <button id="btn-min" class="tb-btn" title="Minimize">&#9472;</button>
@@ -25,6 +26,16 @@
 <div id="app">
   <aside id="sidebar">
     <button id="btn-new" class="new-btn">+ New chat</button>
+    <div id="sessions"></div>
+
+    <!-- profile block, bottom-left -->
+    <div id="profile">
+      <div class="p-avatar" id="p-avatar"></div>
+      <div class="p-info">
+        <div class="p-name">krait</div>
+        <div class="p-sub" id="p-sub">free &middot; local keys</div>
+      </div>
+    </div>
   </aside>
 
   <main id="chat">
@@ -45,11 +56,13 @@
           <option value="max">Max</option>
           <option value="ultra">Ultracode</option>
         </select>
+        <span class="spacer"></span>
+        <span id="token-info" title="Tokens used this chat (from the API)">0 tok</span>
       </div>
       <div class="row">
         <textarea id="prompt" rows="1" placeholder="Ask anything..."></textarea>
         <button id="btn-send" class="round" title="Send (Enter)">&#10148;</button>
-        <button id="btn-stop" class="round stop" title="Stop (click)" style="display:none">&#9632;</button>
+        <button id="btn-stop" class="round stop" title="Stop" style="display:none">&#9632;</button>
       </div>
     </div>
   </main>
@@ -58,8 +71,24 @@
     <div id="term-out"></div>
     <input id="term-in" placeholder="$ command" spellcheck="false" autocomplete="off">
   </aside>
+
+  <aside id="changes" class="hidden">
+    <div class="drawer-head">Changes <button id="changes-close" class="tb-btn">&#10005;</button></div>
+    <div id="changes-stat"></div>
+    <div id="changes-diff"></div>
+  </aside>
 </div>
 
+<!-- profile menu -->
+<div id="profile-menu" class="hidden">
+  <button class="pm-item" id="pm-settings">&#9881; Settings &amp; keys</button>
+  <button class="pm-item" id="pm-plugins">&#9881;&#65039; Plugins</button>
+  <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
+  <div class="pm-sep"></div>
+  <div class="pm-about">krait v0.4.0 &middot; your keys, your models</div>
+</div>
+
+<!-- key screen -->
 <div id="key-screen">
   <div class="key-box">
     <button id="key-close" class="key-close" title="Close">&#10005;</button>
@@ -84,6 +113,29 @@
     </form>
   </div>
 </div>
+
+<!-- plugins screen -->
+<div id="plugins-screen" class="overlay">
+  <div class="overlay-box">
+    <button class="key-close" id="plugins-close">&#10005;</button>
+    <h1>Plugins</h1>
+    <p class="key-sub">Built-in tools krait can use while coding.</p>
+    <div id="plugins-list"></div>
+  </div>
+</div>
+
+<!-- connectors screen -->
+<div id="connectors-screen" class="overlay">
+  <div class="overlay-box">
+    <button class="key-close" id="connectors-close">&#10005;</button>
+    <h1>Connectors</h1>
+    <p class="key-sub">Link outside services to your workspace.</p>
+    <div id="connectors-list"></div>
+  </div>
+</div>
+
+<!-- toast -->
+<div id="toast" class="hidden"></div>
 
 <script src="app.js"></script>
 </body>

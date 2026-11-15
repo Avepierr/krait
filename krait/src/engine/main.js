@@ -54,13 +54,50 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
     full = await streamChat(modelId, messages || [], delta => {
       if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
     }, currentAbort.signal, opts || {});
-    return { text: full };
+    return { text: full.text, usage: full.usage };
   } catch (err) {
     if (err && err.name === 'AbortError') return { text: full, aborted: true };
     return { error: String((err && err.message) || err) };
   } finally {
     currentAbort = null;
   }
+});
+
+// ─── Sessions (save / resume) ───
+const { SessionStore } = require('./session');
+const store = new SessionStore(DATA_DIR);
+
+ipcMain.handle('krait:sessions-create', (_, name) => store.create(name));
+ipcMain.handle('krait:sessions-append', (_, id, message) => { store.append(id, message); return true; });
+ipcMain.handle('krait:sessions-load', (_, id) => store.load(id));
+ipcMain.handle('krait:sessions-list', () => store.list());
+ipcMain.handle('krait:sessions-delete', (_, id) => { store.delete(id); return true; });
+
+// ─── Project memory (KRAIT.md / AGENTS.md at the project root) ───
+ipcMain.handle('krait:project-memory', () => {
+  const files = ['KRAIT.md', 'AGENTS.md'];
+  let memory = '';
+  for (const f of files) {
+    try {
+      const t = require('fs').readFileSync(path.join(PROJECT_DIR, f), 'utf8').trim();
+      if (t) memory += (memory ? '\n\n' : '') + '--- ' + f + ' ---\n' + t;
+    } catch {}
+  }
+  return memory || null;
+});
+
+// ─── Git changes (for the Changes panel) ───
+ipcMain.handle('krait:git-diff', () => {
+  return new Promise(resolve => {
+    exec('git diff --stat HEAD', { cwd: PROJECT_DIR, timeout: 15000, windowsHide: true }, (e1, statOut) => {
+      exec('git diff HEAD', { cwd: PROJECT_DIR, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (e2, diffOut) => {
+        resolve({
+          stat: (statOut || '').trim() || '(no uncommitted changes)',
+          diff: (diffOut || '').slice(0, 100000),
+        });
+      });
+    });
+  });
 });
 
 ipcMain.handle('krait:abort', () => {

@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld('krait', {
   abortChat: () => ipcRenderer.invoke('krait:abort'),
   onDelta: cb => ipcRenderer.on('krait:delta', (_, d) => cb(d)),
 
+  createSession: name => ipcRenderer.invoke('krait:sessions-create', name),
+  appendSession: (id, m) => ipcRenderer.invoke('krait:sessions-append', id, m),
+  loadSession: id => ipcRenderer.invoke('krait:sessions-load', id),
+  listSessions: () => ipcRenderer.invoke('krait:sessions-list'),
+  deleteSession: id => ipcRenderer.invoke('krait:sessions-delete', id),
+  projectMemory: () => ipcRenderer.invoke('krait:project-memory'),
+  gitDiff: () => ipcRenderer.invoke('krait:git-diff'),
+
   runTerminal: c => ipcRenderer.invoke('krait:terminal', c),
 
   minimize: () => ipcRenderer.invoke('krait:minimize'),

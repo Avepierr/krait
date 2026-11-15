@@ -29,12 +29,17 @@ function buildSystem(opts) {
   if (opts && opts.mode && opts.mode !== 'normal') {
     sys += '\nMode: ' + opts.mode + '.';
   }
+  if (opts && opts.memory) {
+    sys += '\n\nProject memory (follow it):\n' + String(opts.memory).slice(0, 8000);
+  }
   return sys;
 }
 
 /**
  * Stream a chat completion. Calls onDelta(textChunk) as words arrive.
- * Returns the full text. Throws Error with a friendly message on failure.
+ * Returns { text, usage } — usage is real token counts from the API
+ * ({ input, output, total }), estimated as a fallback.
+ * Throws Error with a friendly message on failure.
  */
 async function streamChat(modelId, messages, onDelta, signal, opts) {
   const { ns, model } = splitModel(modelId);
@@ -85,6 +90,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       model,
       stream: true,
       max_tokens: 4096,
+      stream_options: { include_usage: true },
       messages: [{ role: 'system', content: sys }, ...clean],
     };
   } else {
@@ -111,6 +117,7 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
   const dec = new TextDecoder();
   let buf = '';
   let full = '';
+  let usage = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -132,11 +139,47 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
         full += delta;
         if (onDelta) onDelta(delta);
       }
+      const u = extractUsage(ns, j);
+      if (u) usage = u;
     }
   }
 
   if (!full.trim()) throw new Error(ns + ' returned an empty reply (check your key and model).');
-  return full;
+  if (!usage) usage = estimateUsage(sys, clean, full);
+  return { text: full, usage };
+}
+
+function extractUsage(ns, j) {
+  if (ns === 'gemini') {
+    const u = j.usageMetadata;
+    if (!u) return null;
+    return {
+      input: u.promptTokenCount || 0,
+      output: u.candidatesTokenCount || 0,
+      total: u.totalTokenCount || ((u.promptTokenCount || 0) + (u.candidatesTokenCount || 0)),
+    };
+  }
+  if (ns === 'anthropic') {
+    const u = j.usage || (j.message && j.message.usage);
+    if (!u) return null;
+    const input = u.input_tokens || 0;
+    const output = u.output_tokens || 0;
+    return { input, output, total: input + output };
+  }
+  const u = j.usage;
+  if (!u) return null;
+  const input = u.prompt_tokens || 0;
+  const output = u.completion_tokens || 0;
+  return { input, output, total: input + output };
+}
+
+/** Rough fallback when the API doesn't report usage (~4 chars per token). */
+function estimateUsage(sys, messages, reply) {
+  let chars = sys.length;
+  for (const m of messages) chars += m.content.length;
+  const input = Math.ceil(chars / 4);
+  const output = Math.ceil(reply.length / 4);
+  return { input, output, total: input + output, estimated: true };
 }
 
 function extractDelta(ns, j) {
@@ -154,7 +197,8 @@ function extractDelta(ns, j) {
 
 /** One-shot helper (no UI) for tests and the CLI. */
 async function chatOnce(modelId, messages, opts) {
-  return streamChat(modelId, messages, null, undefined, opts);
+  const out = await streamChat(modelId, messages, null, undefined, opts);
+  return out.text;
 }
 
 module.exports = { streamChat, chatOnce, splitModel };
