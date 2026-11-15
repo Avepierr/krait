@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>krait</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- Frameless titlebar -->
+<header id="titlebar">
+  <div class="titlebar-drag">
+    <img src="" class="titlebar-icon" alt="">
+    <span class="titlebar-name">krait</span>
+    <span id="session-name" class="titlebar-session">— untitled</span>
+  </div>
+  <div class="titlebar-controls">
+    <button class="tb-btn" id="btn-minimize">─</button>
+    <button class="tb-btn" id="btn-maximize">□</button>
+    <button class="tb-btn tb-close" id="btn-close">✕</button>
+  </div>
+</header>
+
+<div id="app-layout">
+  <!-- Left sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new" id="btn-new-session">+ New</button>
+    </div>
+    <div id="session-list"></div>
+  </aside>
+
+  <!-- Main area -->
+  <main id="main-area">
+    <section id="conversation-panel">
+      <div id="messages-container"></div>
+
+      <!-- Composer -->
+      <div id="composer">
+        <div class="composer-row">
+          <button id="composer-attach" class="composer-btn" title="Attach files">+</button>
+          <div id="composer-input-wrapper">
+            <div class="mode-chip">
+              <select id="mode-select">
+                <option value="manual">Manual</option>
+                <option value="acceptEdits">Accept edits</option>
+                <option value="plan">Plan</option>
+              </select>
+            </div>
+            <textarea id="composer-input" rows="2" placeholder="Ask anything, anywhere…"></textarea>
+          </div>
+          <button id="composer-send" class="composer-btn btn-send" title="Send (Enter)">→</button>
+          <button id="composer-stop" class="composer-btn btn-stop" title="Stop (Esc)" style="display:none">■</button>
+        </div>
+        <div class="composer-footer">
+          <select id="model-select" class="model-chip">
+            <option value="">— pick a model —</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right panels -->
+    <aside id="right-panels" class="collapsed">
+      <div class="panel-tabs">
+        <button class="panel-tab active" data-panel="changes">Changes</button>
+        <button class="panel-tab" data-panel="terminal">Terminal</button>
+        <button class="panel-tab" data-panel="files">Files</button>
+      </div>
+      <div id="panel-changes" class="panel-content active"></div>
+      <div id="panel-terminal" class="panel-content">
+        <div id="terminal-output"></div>
+        <div class="terminal-input-row"><input type="text" id="terminal-input" placeholder="$ enter a command"></div>
+      </div>
+      <div id="panel-files" class="panel-content"></div>
+    </aside>
+  </main>
+</div>
+
+<!-- Keys screen overlay -->
+<section id="keys-screen" class="overlay show">
+  <div class="overlay-content">
+    <div class="krait-snake-icon"><svg viewBox="0 0 64 64" width="64" height="64"><rect x="4" y="4" width="14" height="14" fill="#222"/><rect x="18" y="4" width="14" height="14" fill="#00D68F"/><rect x="32" y="4" width="14" height="14" fill="#222"/><rect x="4" y="18" width="14" height="14" fill="#00D68F"/><rect x="18" y="18" width="14" height="14" fill="#222"/><rect x="32" y="18" width="14" height="14" fill="#00D68F"/><rect x="46" y="18" width="14" height="14" fill="#222"/><rect x="4" y="32" width="14" height="14" fill="#222"/><rect x="18" y="32" width="14" height="14" fill="#00D68F"/><rect x="32" y="32" width="14" height="14" fill="#222"/><rect x="46" y="32" width="14" height="14" fill="#00D68F"/><rect x="18" y="46" width="14" height="14" fill="#222"/><rect x="32" y="46" width="14" height="14" fill="#00D68F"/><rect x="46" y="46" width="14" height="14" fill="#222"/></svg></div>
+    <h1>krait</h1>
+    <p class="overlay-sub">Free, model-agnostic coding agent</p>
+    <form id="keys-form">
+      <div class="key-field">
+        <label>Google Gemini API Key</label>
+        <div class="key-row"><input type="password" id="key-gemini" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="gemini">Test</button></div>
+        <a class="key-link" href="https://aistudio.google.com/apikey" target="_blank">Get one free →</a>
+      </div>
+      <div class="key-field">
+        <label>OpenRouter API Key</label>
+        <div class="key-row"><input type="password" id="key-openrouter" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="openrouter">Test</button></div>
+        <a class="key-link" href="https://openrouter.ai/keys" target="_blank">Get one free →</a>
+      </div>
+      <div class="key-field">
+        <label>NVIDIA API Key</label>
+        <div class="key-row"><input type="password" id="key-nvidia" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="nvidia">Test</button></div>
+        <a class="key-link" href="https://build.nvidia.com/" target="_blank">Get one free →</a>
+      </div>
+      <div class="key-field">
+        <label>Anthropic API Key (optional — real Claude models)</label>
+        <div class="key-row"><input type="password" id="key-anthropic" placeholder="Paste your API key"><button type="button" class="btn-test-key" data-key="anthropic">Test</button></div>
+        <a class="key-link" href="https://console.anthropic.com/" target="_blank">Get one →</a>
+      </div>
+      <div id="key-status" class="key-status"></div>
+      <button type="submit" class="btn-primary" id="keys-start">Start Coding →</button>
+    </form>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
