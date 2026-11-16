@@ -12,259 +12,119 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
+      background: #1a1a2e;
       font-family: 'Segoe UI', system-ui, sans-serif;
-      color: #eaeaea;
-      padding: 20px;
+      color: #eee;
     }
-    h1 { margin-bottom: 10px; font-weight: 700; letter-spacing: 2px; }
-    .subtitle { color: #888; margin-bottom: 24px; font-size: 0.9rem; }
-    .scoreboard {
-      display: flex;
-      gap: 24px;
-      margin-bottom: 24px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .score-item {
-      background: rgba(255,255,255,0.05);
-      padding: 12px 24px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.1);
-      text-align: center;
-      min-width: 100px;
-    }
-    .score-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px; }
-    .score-value { font-size: 1.5rem; font-weight: 700; }
-    .score-x { color: #ff4757; }
-    .score-o { color: #2ed573; }
-    .score-draw { color: #ffa502; }
-    .turn-indicator {
-      margin-bottom: 16px;
-      font-size: 1.1rem;
-      font-weight: 600;
-      height: 28px;
-    }
-    .turn-x { color: #ff4757; }
-    .turn-o { color: #2ed573; }
+    h1 { margin-bottom: 1rem; font-weight: 300; letter-spacing: 2px; }
+    .status { margin-bottom: 1.5rem; font-size: 1.2rem; min-height: 1.5em; }
     .board {
       display: grid;
       grid-template-columns: repeat(3, 100px);
       grid-template-rows: repeat(3, 100px);
       gap: 8px;
-      margin-bottom: 24px;
-    }
-    @media (max-width: 380px) {
-      .board { grid-template-columns: repeat(3, 80px); grid-template-rows: repeat(3, 80px); }
+      margin-bottom: 1.5rem;
     }
     .cell {
-      background: rgba(255,255,255,0.03);
-      border: 2px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 3rem;
-      font-weight: 700;
+      font-weight: 300;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.15s ease;
       user-select: none;
     }
-    .cell:hover:not(.taken) {
-      background: rgba(255,255,255,0.08);
-      border-color: rgba(255,255,255,0.2);
-      transform: scale(1.02);
-    }
-    .cell.taken { cursor: default; }
-    .cell.x { color: #ff4757; }
-    .cell.o { color: #2ed573; }
-    .cell.win {
-      background: rgba(46, 213, 115, 0.15);
-      border-color: #2ed573;
-      box-shadow: 0 0 20px rgba(46, 213, 115, 0.4);
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-    .cell.win.x { background: rgba(255, 71, 87, 0.15); border-color: #ff4757; box-shadow: 0 0 20px rgba(255, 71, 87, 0.4); }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-    .controls { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .cell:hover:not(.taken) { background: #0f3460; border-color: #e94560; }
+    .cell.x { color: #e94560; }
+    .cell.o { color: #00d9ff; }
+    .cell.win { background: #1a3c2e; border-color: #27ae60; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 #27ae6080; } 50% { box-shadow: 0 0 0 8px #27ae6000; } }
     button {
-      padding: 12px 28px;
+      padding: 0.75rem 2rem;
+      font-size: 1rem;
+      background: #e94560;
+      color: white;
       border: none;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      font-weight: 600;
+      border-radius: 6px;
       cursor: pointer;
-      transition: all 0.2s ease;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+      transition: background 0.2s;
     }
-    .btn-new { background: linear-gradient(135deg, #2ed573, #1dd1a1); color: #0d1b15; }
-    .btn-new:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(46, 213, 115, 0.4); }
-    .btn-reset { background: rgba(255,255,255,0.05); color: #eaeaea; border: 1px solid rgba(255,255,255,0.1); }
-    .btn-reset:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
-    .modal {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.8);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-    }
-    .modal.show { display: flex; }
-    .modal-content {
-      background: #1a1a2e;
-      padding: 40px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.1);
-      text-align: center;
-      max-width: 90vw;
-    }
-    .modal-title { font-size: 2rem; margin-bottom: 12px; }
-    .modal-title.x-win { color: #ff4757; }
-    .modal-title.o-win { color: #2ed573; }
-    .modal-title.draw { color: #ffa502; }
-    .modal-btn { margin-top: 20px; }
+    button:hover { background: #d6344e; }
+    .score { display: flex; gap: 2rem; margin-bottom: 1rem; font-size: 1.1rem; }
+    .score span { background: #16213e; padding: 0.5rem 1rem; border-radius: 6px; }
   </style>
 </head>
 <body>
   <h1>TIC TAC TOE</h1>
-  <p class="subtitle">Player X vs Player O</p>
-  
-  <div class="scoreboard">
-    <div class="score-item"><div class="score-label">X Wins</div><div class="score-value score-x" id="scoreX">0</div></div>
-    <div class="score-item"><div class="score-label">Draws</div><div class="score-value score-draw" id="scoreDraw">0</div></div>
-    <div class="score-item"><div class="score-label">O Wins</div><div class="score-value score-o" id="scoreO">0</div></div>
+  <div class="score">
+    <span>X: <span id="sx">0</span></span>
+    <span>O: <span id="so">0</span></span>
+    <span>Draws: <span id="sd">0</span></span>
   </div>
-  
-  <div class="turn-indicator" id="turnIndicator"><span class="turn-x">Player X</span>'s turn</div>
-  
-  <div class="board" id="board" role="grid" aria-label="Tic Tac Toe board"></div>
-  
-  <div class="controls">
-    <button class="btn-new" id="btnNew">New Game</button>
-    <button class="btn-reset" id="btnReset">Reset Scores</button>
-  </div>
-  
-  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="modal-content">
-      <div class="modal-title" id="modalTitle">Game Over</div>
-      <button class="btn-new modal-btn" id="btnModalNew">Play Again</button>
-    </div>
-  </div>
-
+  <div class="status" id="status">X's turn</div>
+  <div class="board" id="board"></div>
+  <button id="reset">New Game</button>
   <script>
-    const WIN_COMBOS = [
-      [0,1,2], [3,4,5], [6,7,8],
-      [0,3,6], [1,4,7], [2,5,8],
-      [0,4,8], [2,4,6]
-    ];
-    
-    let board = Array(9).fill(null);
-    let currentPlayer = 'X';
-    let gameActive = true;
-    let scores = { X: 0, O: 0, draw: 0 };
-    
-    const boardEl = document.getElementById('board');
-    const turnEl = document.getElementById('turnIndicator');
-    const scoreXEl = document.getElementById('scoreX');
-    const scoreOEl = document.getElementById('scoreO');
-    const scoreDrawEl = document.getElementById('scoreDraw');
-    const modal = document.getElementById('modal');
-    const modalTitle = document.getElementById('modalTitle');
-    
-    function createBoard() {
-      boardEl.innerHTML = '';
-      board.forEach((_, i) => {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        cell.dataset.index = i;
-        cell.setAttribute('role', 'button');
-        cell.setAttribute('tabindex', '0');
-        cell.setAttribute('aria-label', `Cell ${i + 1}`);
-        cell.addEventListener('click', () => handleMove(i));
-        cell.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMove(i); } });
-        boardEl.appendChild(cell);
-      });
-    }
-    
-    function updateTurnDisplay() {
-      turnEl.innerHTML = `<span class="turn-${currentPlayer.toLowerCase()}">Player ${currentPlayer}</span>'s turn`;
-    }
-    
-    function updateScores() {
-      scoreXEl.textContent = scores.X;
-      scoreOEl.textContent = scores.O;
-      scoreDrawEl.textContent = scores.draw;
-    }
-    
-    function handleMove(index) {
-      if (!gameActive || board[index]) return;
-      
-      board[index] = currentPlayer;
-      const cell = boardEl.children[index];
-      cell.textContent = currentPlayer;
-      cell.classList.add(currentPlayer.toLowerCase(), 'taken');
-      
-      const winCombo = checkWin();
-      if (winCombo) {
-        endGame('win', winCombo);
-      } else if (board.every(c => c)) {
-        endGame('draw');
-      } else {
-        currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
-        updateTurnDisplay();
+    const board = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const resetBtn = document.getElementById('reset');
+    const sx = document.getElementById('sx'), so = document.getElementById('so'), sd = document.getElementById('sd');
+    let cells = [], current = 'X', gameOver = false;
+    const wins = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    let scores = { X: 0, O: 0, D: 0 };
+    function init() {
+      board.innerHTML = '';
+      cells = [];
+      current = 'X';
+      gameOver = false;
+      statusEl.textContent = "X's turn";
+      for (let i = 0; i < 9; i++) {
+        const c = document.createElement('div');
+        c.className = 'cell';
+        c.dataset.i = i;
+        c.addEventListener('click', () => move(i));
+        board.appendChild(c);
+        cells.push(c);
       }
     }
-    
-    function checkWin() {
-      return WIN_COMBOS.find(combo => 
-        combo.every(i => board[i] === currentPlayer)
-      );
-    }
-    
-    function endGame(result, winCombo = null) {
-      gameActive = false;
-      
-      if (result === 'win') {
-        scores[currentPlayer]++;
-        winCombo.forEach(i => {
-          boardEl.children[i].classList.add('win', currentPlayer.toLowerCase());
+    function move(i) {
+      if (gameOver || cells[i].classList.contains('taken')) return;
+      cells[i].textContent = current;
+      cells[i].classList.add(current.toLowerCase(), 'taken');
+      if (checkWin(current)) {
+        gameOver = true;
+        statusEl.textContent = current + ' wins!';
+        scores[current]++;
+        updateScores();
+        wins.forEach(c => {
+          if (c.every(idx => cells[idx].textContent === current)) {
+            c.forEach(idx => cells[idx].classList.add('win'));
+          }
         });
-        modalTitle.textContent = `Player ${currentPlayer} Wins!`;
-        modalTitle.className = `modal-title ${currentPlayer.toLowerCase()}-win`;
+      } else if (cells.every(c => c.classList.contains('taken'))) {
+        gameOver = true;
+        statusEl.textContent = "It's a draw";
+        scores.D++;
+        updateScores();
       } else {
-        scores.draw++;
-        modalTitle.textContent = "It's a Draw!";
-        modalTitle.className = 'modal-title draw';
+        current = current === 'X' ? 'O' : 'X';
+        statusEl.textContent = current + "'s turn";
       }
-      
-      updateScores();
-      setTimeout(() => modal.classList.add('show'), 500);
     }
-    
-    function newGame() {
-      board = Array(9).fill(null);
-      currentPlayer = 'X';
-      gameActive = true;
-      modal.classList.remove('show');
-      createBoard();
-      updateTurnDisplay();
+    function checkWin(p) {
+      return wins.some(c => c.every(idx => cells[idx].textContent === p));
     }
-    
-    function resetScores() {
-      scores = { X: 0, O: 0, draw: 0 };
-      updateScores();
-      newGame();
+    function updateScores() {
+      sx.textContent = scores.X;
+      so.textContent = scores.O;
+      sd.textContent = scores.D;
     }
-    
-    document.getElementById('btnNew').addEventListener('click', newGame);
-    document.getElementById('btnReset').addEventListener('click', resetScores);
-    document.getElementById('btnModalNew').addEventListener('click', newGame);
-    
-    createBoard();
-    updateTurnDisplay();
-    updateScores();
+    resetBtn.addEventListener('click', init);
+    init();
   </script>
 </body>
 </html>

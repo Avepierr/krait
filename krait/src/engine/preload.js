@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('krait', {
   loadSession: id => ipcRenderer.invoke('krait:sessions-load', id),
   listSessions: () => ipcRenderer.invoke('krait:sessions-list'),
   deleteSession: id => ipcRenderer.invoke('krait:sessions-delete', id),
+  renameSession: (id, name) => ipcRenderer.invoke('krait:sessions-rename', id, name),
   projectMemory: () => ipcRenderer.invoke('krait:project-memory'),
   gitDiff: () => ipcRenderer.invoke('krait:git-diff'),
 
@@ -28,6 +29,7 @@ contextBridge.exposeInMainWorld('krait', {
   projectsAdd: (n, d) => ipcRenderer.invoke('krait:projects-add', n, d),
   projectsSetActive: id => ipcRenderer.invoke('krait:projects-set-active', id),
   projectsDelete: id => ipcRenderer.invoke('krait:projects-delete', id),
+  projectsRename: (id, name) => ipcRenderer.invoke('krait:projects-rename', id, name),
   pickFolder: () => ipcRenderer.invoke('krait:pick-folder'),
 
   mcpGet: () => ipcRenderer.invoke('krait:mcp-get'),

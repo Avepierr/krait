@@ -227,6 +227,17 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
       r = await attempt(modelId);
     } catch (err) {
       if (err && err.name === 'AbortError') throw err;
+      // IMAGE FALLBACK: text-only models reject images outright - switch to a vision model
+      const emsg = String((err && err.message) || err);
+      if (/image/i.test(emsg) && (messages || []).some(m => m.images && m.images.length)) {
+        const vm = pickVisionModel(ns);
+        if (vm) {
+          if (!event.sender.isDestroyed()) event.sender.send('krait:fallback', { from: ns, to: vm.split('/')[0], error: 'switched to a vision model' });
+          r = await attempt(vm);
+        } else {
+          throw new Error(emsg + ' - no vision-capable model is available. Pick a vision model (e.g. Nemotron 3.5 VL free) and send the image again.');
+        }
+      }
       // AUTO-FALLBACK: the provider failed (rate limit, dead model...) → retry once
       // on another configured provider so the chat keeps working.
       const fb = pickFallbackModel(ns);
@@ -244,6 +255,27 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
     currentAbort = null;
   }
 });
+
+/** Pick a vision-capable model (live catalog; verified free vision models preferred). */
+function pickVisionModel(failedNs) {
+  let cached = {};
+  try { cached = loadModelCache().data || {}; } catch {}
+  const RE = /(vision|[-.]vl\b|-vl\b|omni|gemma|gemini|pixtral|llava|moondream|minicpm-v|internvl)/i;
+  const PREF = [['openrouter', 'nvidia/nemotron-3.5-super-vl:free'], ['openrouter', 'google/gemma-4-31b-it:free']];
+  for (const [pfns, pfid] of PREF) {
+    if (pfns === failedNs) continue;
+    const list = cached[pfns];
+    if (Array.isArray(list) && list.some(m => m.id === pfid)) return pfns + '/' + pfid;
+  }
+  for (const p of ['openrouter', 'nvidia', 'gemini', 'ollama', 'huggingface', 'github']) {
+    if (p === failedNs) continue;
+    const list = cached[p];
+    if (!Array.isArray(list) || !list.length) continue;
+    const hit = list.find(m => RE.test(m.id));
+    if (hit) return p + '/' + hit.id;
+  }
+  return null;
+}
 
 /** Pick a fallback model from a different configured provider (live catalog first). */
 function pickFallbackModel(failedNs) {
@@ -313,6 +345,7 @@ ipcMain.handle('krait:sessions-append', (_, id, message) => { store.append(id, m
 ipcMain.handle('krait:sessions-load', (_, id) => store.load(id));
 ipcMain.handle('krait:sessions-list', () => store.list());
 ipcMain.handle('krait:sessions-delete', (_, id) => { store.delete(id); return true; });
+ipcMain.handle('krait:sessions-rename', (_, id, name) => { store.rename(id, name); return true; });
 
 // ─── Project memory (KRAIT.md / AGENTS.md in the active project) ───
 ipcMain.handle('krait:project-memory', () => {
@@ -341,6 +374,13 @@ ipcMain.handle('krait:projects-add', (_, name, dir) => {
 ipcMain.handle('krait:projects-set-active', (_, id) => {
   const p = loadProjects();
   p.active = id;
+  saveProjects(p);
+  return p;
+});
+ipcMain.handle('krait:projects-rename', (_, id, name) => {
+  const p = loadProjects();
+  const it = p.list.find(x => x.id === id);
+  if (it) it.name = String(name || it.name).slice(0, 60);
   saveProjects(p);
   return p;
 });

@@ -50,6 +50,17 @@ class SessionStore {
     return all.length > 0 ? all[0] : null;
   }
 
+  rename(id, name) {
+    const metaPath = path.join(this.sessionsDir, `${id}.meta`);
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      meta.name = String(name || 'chat').slice(0, 60);
+      meta.updated = Date.now();
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+      return true;
+    } catch { return false; }
+  }
+
   delete(id) {
     try {
       fs.unlinkSync(path.join(this.sessionsDir, `${id}.jsonl`));

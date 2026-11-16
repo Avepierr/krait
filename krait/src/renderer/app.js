@@ -481,8 +481,14 @@ function renderWelcome() {
     '<h2>Happy ' + day + '</h2><p>Ask anything, paste a screenshot, or tell krait to build something.</p></div>';
 }
 
-function scrollDown() {
+function scrollDown(force) {
   const m = $('messages');
+  if (!m) return;
+  if (!force) {
+    // the user scrolled up to read - do not yank them back down while the AI works
+    const near = m.scrollHeight - m.scrollTop - m.clientHeight < 140;
+    if (!near) return;
+  }
   m.scrollTop = m.scrollHeight;
 }
 
@@ -596,11 +602,17 @@ function liveWriteFeed(raw) {
   const w = extractLiveWrite(raw);
   if (!w || !w.path) return;
   const b = addWriteBlock(w.path);
-  if (!b || b.done) return;
-  const pre = b.el.querySelector('.w-code');
-  const lines = String(w.content || '').split('\n');
-  pre.textContent = lines.length > 40 ? '...\n' + lines.slice(-40).join('\n') : w.content;
-  pre.scrollTop = pre.scrollHeight;
+  if (b && !b.done) {
+    const pre = b.el.querySelector('.w-code');
+    const lines = String(w.content || '').split('\n');
+    pre.textContent = lines.length > 40 ? '...\n' + lines.slice(-40).join('\n') : w.content;
+    pre.scrollTop = pre.scrollHeight;
+  }
+  // feed the open viewer too, so Rendered/Code work WHILE the AI is still writing
+  if (pvPath === w.path && !$('preview-modal').classList.contains('hidden')) {
+    pvLive = { path: w.path, content: String(w.content || '') };
+    updatePreviewLive();
+  }
 }
 function appendDelta(d) {
   if (!currentAssistant) return;
@@ -846,6 +858,26 @@ let tgroupRunning = 0;    // rows still running in it
 const pendingRows = {};   // tool name -> row awaiting its done event
 function resetToolGroup() { tgroupEl = null; tgroupRunning = 0; for (const k of Object.keys(pendingRows)) delete pendingRows[k]; }
 
+/** Unique tool names used inside a group ("Edit, Shell"). */
+function tgNames(g) {
+  const seen = [];
+  if (!g) return seen;
+  g.querySelectorAll('.tg-row').forEach(r => {
+    const n = r.dataset.tool;
+    if (n && !seen.includes(n)) seen.push(n);
+  });
+  return seen;
+}
+
+/** Header label: "Using 2 Edit, Shell..." while running, "Used 2 Edit, Shell" when done. */
+function tgUpdateHead(g, running) {
+  if (!g) return;
+  const label = g.querySelector('.tg-label');
+  if (!label) return;
+  const rows = g.querySelectorAll('.tg-row').length;
+  label.textContent = (running ? 'Using ' : 'Used ') + rows + ' ' + tgNames(g).join(', ') + (running ? '\u2026' : '');
+}
+
 /** Short label for a tool row ("make-ico.js", "Shell npm test", "Find *.js"). */
 function toolRowLabel(info) {
   const i = info.input || {};
@@ -942,10 +974,14 @@ function addDiffBlock(p, oldStr, newStr) {
 /* ── Preview modal (Rendered / Code, live-refreshing) ── */
 let pvPoll = null;
 let pvPath = null;
+let pvLive = null; // streamed content for the file open in the viewer (works mid-write)
+const PLACEHOLDER_HTML = '<!DOCTYPE html><html><head><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#141414;color:#8a8a8a;font-family:system-ui,sans-serif;font-size:15px}</style></head><body>Building&hellip;</body></html>';
 
 function openPreview(p) {
   const modal = $('preview-modal');
   pvPath = p;
+  pvLive = null;
+  $('pv-tab-render').style.display = '';   // reset (a previous non-html file may have hidden it)
   $('pv-title').textContent = String(p).split(/[\\/]/).pop();
   modal.classList.remove('hidden');
   setPvTab(true);
@@ -957,7 +993,18 @@ function openPreview(p) {
 function refreshPreview() {
   if (!pvPath || !window.krait) return;
   window.krait.readFile(pvPath).then(r => {
-    if (!r.ok) { $('pv-code').textContent = 'Cannot read file: ' + r.error; return; }
+    if (!r.ok) {
+      // file not on disk yet - show the streamed content instead (mid-write view)
+      const live = (pvLive && pvLive.path === pvPath) ? pvLive.content : null;
+      if ($('pv-tab-code').classList.contains('active')) {
+        $('pv-code').textContent = live != null ? (live || 'Waiting for the first lines...') : 'Waiting for the AI to create this file...';
+      }
+      if (/\.html?$/i.test(pvPath)) {
+        $('pv-frame').style.display = '';
+        $('pv-frame').srcdoc = (live && live.length) ? live : PLACEHOLDER_HTML;
+      }
+      return;
+    }
     if ($('pv-tab-code').classList.contains('active')) $('pv-code').textContent = r.content;
     if (/\.html?$/i.test(pvPath)) {
       $('pv-frame').style.display = '';
@@ -969,13 +1016,29 @@ function refreshPreview() {
   }).catch(() => {});
 }
 
+/** Push freshly streamed content into the open viewer (called by liveWriteFeed). */
+function updatePreviewLive() {
+  if (!pvLive || pvLive.path !== pvPath) return;
+  const c = pvLive.content || '';
+  if ($('pv-tab-code').classList.contains('active')) {
+    $('pv-code').textContent = c || 'Waiting for the first lines...';
+    $('pv-code').scrollTop = $('pv-code').scrollHeight;
+  }
+  if (/\.html?$/i.test(pvPath) && $('pv-tab-render').classList.contains('active')) {
+    $('pv-frame').srcdoc = c || PLACEHOLDER_HTML;
+  }
+}
+
 function setPvTab(rendered) {
   $('pv-tab-render').classList.toggle('active', rendered);
   $('pv-tab-code').classList.toggle('active', !rendered);
   $('pv-frame').style.display = rendered ? '' : 'none';
   $('pv-code').style.display = rendered ? 'none' : '';
   if (!rendered && pvPath && window.krait) {
-    window.krait.readFile(pvPath).then(r => { if (r.ok) $('pv-code').textContent = r.content; }).catch(() => {});
+    window.krait.readFile(pvPath).then(r => {
+      if (r.ok) { $('pv-code').textContent = r.content; return; }
+      if (pvLive && pvLive.path === pvPath) $('pv-code').textContent = pvLive.content || 'Waiting for the first lines...';
+    }).catch(() => {});
   }
 }
 
@@ -1303,6 +1366,33 @@ async function ensureSession(title) {
   await window.krait.appendSession(K.sessionId, { role: 'user', content: K.messages[K.messages.length - 1].content });
 }
 
+/** Inline chat rename (pencil button in the sidebar). */
+function startRename(s, span) {
+  const input = document.createElement('input');
+  input.className = 's-rename';
+  input.value = s.name || 'chat';
+  input.maxLength = 40;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let closed = false;
+  const done = async save => {
+    if (closed) return;
+    closed = true;
+    if (save) {
+      const v = input.value.trim();
+      if (v && v !== s.name && window.krait) await window.krait.renameSession(s.id, v);
+    }
+    refreshSessionList();
+  };
+  input.onkeydown = e => {
+    if (e.key === 'Enter') done(true);
+    else if (e.key === 'Escape') done(false);
+  };
+  input.onblur = () => done(true);
+  input.onclick = e => e.stopPropagation();
+}
+
 async function refreshSessionList() {
   if (!window.krait) return;
   const list = await window.krait.listSessions();
@@ -1315,6 +1405,11 @@ async function refreshSessionList() {
     name.textContent = (s.name || 'chat').slice(0, 22);
     el.title = 'Open chat';
     el.onclick = () => { if (s.id !== K.sessionId) resumeSession(s.id); };
+    const pen = document.createElement('span');
+    pen.className = 's-del';
+    pen.textContent = '\u270e';
+    pen.title = 'Rename chat';
+    pen.onclick = e => { e.stopPropagation(); startRename(s, name); };
     const del = document.createElement('span');
     del.className = 's-del';
     del.textContent = '\u00d7';
@@ -1326,6 +1421,7 @@ async function refreshSessionList() {
       refreshSessionList();
     };
     el.appendChild(name);
+    el.appendChild(pen);
     el.appendChild(del);
     box.appendChild(el);
   }
@@ -1396,12 +1492,35 @@ async function renderProjects() {
       K.memory = await window.krait.projectMemory();
       renderProjects();
     };
+    const pen = document.createElement('button');
+    pen.className = 'conn-btn'; pen.textContent = '\u270e'; pen.title = 'Rename project';
+    pen.onclick = e => {
+      e.stopPropagation();
+      const nameEl = el.querySelector('.mcp-name');
+      const input = document.createElement('input');
+      input.value = pr.name; input.maxLength = 40; input.className = 's-rename';
+      nameEl.replaceWith(input);
+      input.focus(); input.select();
+      let closed = false;
+      const done = async save => {
+        if (closed) return; closed = true;
+        if (save) {
+          const v = input.value.trim();
+          if (v && v !== pr.name && window.krait) { await window.krait.projectsRename(pr.id, v); toast('Project renamed'); }
+        }
+        renderProjects();
+      };
+      input.onkeydown = ev => { if (ev.key === 'Enter') done(true); else if (ev.key === 'Escape') done(false); };
+      input.onblur = () => done(true);
+      input.onclick = ev => ev.stopPropagation();
+    };
     el.onclick = async () => {
       await window.krait.projectsSetActive(pr.id);
       K.memory = await window.krait.projectMemory();
       toast('Project: ' + pr.name);
       renderProjects();
     };
+    el.appendChild(pen);
     el.appendChild(del);
     box.appendChild(el);
   }
@@ -1904,17 +2023,25 @@ async function fillModelSelect(keys) {
   renderModelDropdown();
 }
 
-/** When images are attached, make sure the selected model can see. */
+/** Model ids that accept images (regex + explicit flags from catalogs). */
+const VISION_RE = /(vision|[-.]vl\b|-vl\b|omni|gemma|gemini|pixtral|llava|moondream|minicpm-v|internvl)/i;
+function isVisionModel(full) { return VISION_RE.test(String(full)); }
+
+/** When images are attached, make sure the selected model can see (live catalogs too). */
 function ensureVisionModel() {
-  if (K.vision) return;
-  const sel = $('model-select');
-  const v = Array.from(sel.options).find(o => o.dataset.vision === '1');
-  if (v) {
-    sel.value = v.value;
-    K.model = v.value;
-    K.vision = true;
-    addNotice('Switched to <b>' + v.textContent + '</b> so krait can see your image.');
-    syncModelDD();
+  const cur = (K.modelList || []).find(m => m.ns + '/' + m.id === K.model);
+  if (cur && (cur.vision || isVisionModel(cur.ns + '/' + cur.id))) { K.vision = true; return; }
+  // verified free vision models first (tested live), then any vision-capable one
+  const PREF = ['openrouter/nvidia/nemotron-3.5-super-vl:free', 'openrouter/google/gemma-4-31b-it:free'];
+  let pick = null;
+  for (const pf of PREF) {
+    pick = (K.modelList || []).find(m => m.ns + '/' + m.id === pf);
+    if (pick) break;
+  }
+  if (!pick) pick = (K.modelList || []).find(m => m.vision || isVisionModel(m.ns + '/' + m.id));
+  if (pick) {
+    pickModel(pick.ns + '/' + pick.id, true);
+    toast('Switched to a vision model so krait can see your image');
   }
 }
 

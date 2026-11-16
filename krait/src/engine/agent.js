@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const TOOL_BLOCK_RE = /```tool\s*\n?([\s\S]*?)```/g;
-const MAX_ROUNDS = 6;
+const MAX_ROUNDS = 8;
 
 const KNOWN_TOOLS = new Set(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebFetch', 'Ask']);
 const READ_ONLY = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Ask']);
@@ -175,6 +175,7 @@ function toolPrompt(enabled) {
     'IMPORTANT - CREATING THINGS: when the user asks you to build, create, make, or generate anything ' +
     '(an app, game, page, spreadsheet, file), you MUST create the real file with the Write tool. ' +
     'NEVER dump the full file content as a code block in chat - that is a failure. Write the file, keep your chat answer short.\n' +
+    'If a Write call failed or the file ended up incomplete or empty, call Write AGAIN with the complete content. Never finish without the file being written.\n' +
     'Available tools:\n';
   for (const t of all) {
     s += '- ' + t.name + ': ' + t.description + '. Args: ' +
