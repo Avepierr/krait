@@ -1,7 +1,7 @@
 @echo off
 rem krait CLI - chat in this terminal (default) or open the desktop app
 if "%~1"=="--version" (
-  echo krait 1.9.3 by Avepier - free AI coding agent
+  echo krait 1.9.4 by Avepier - free AI coding agent
   exit /b 0
 )
 if "%~1"=="--help" (

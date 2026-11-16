@@ -2650,7 +2650,7 @@ let termAgentOn = false;
 let termPickOn = false;
 let termConvo = [];
 let termLaunch = null; // { cmd, more, idx, items }
-const TERM_VERSION = '1.9.3';
+const TERM_VERSION = '1.9.4';
 function shortModelId(full) { return String(full || '').split('/').pop() || 'none'; }
 function ollamaModel() {
   const list = (K.modelList || []).filter(m => m.ns === 'ollama');
