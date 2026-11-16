@@ -41,6 +41,9 @@ let A = THEMES.green; // accent - user changeable
 function out(s) { process.stdout.write(s); }
 
 const TTY = !!process.stdin.isTTY;
+// KRAIT_PUMP=1: the Windows shim's pump.ps1 feeds us console lines through stdin
+// (electron run-as-node cannot read console stdin on Windows - readline EOFs instantly).
+const PUMP = process.env.KRAIT_PUMP === '1';
 let model = null;
 let convo = [];
 let agentMode = false;
@@ -185,13 +188,13 @@ function clearMenu() {
   menu = null;
   mode = 'input';
 }
-function closeMenu() { clearMenu(); if (TTY) { renderIdle(); rl.prompt(); } }
+function closeMenu() { clearMenu(); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } }
 function menuEnter() {
   const items = menuItems();
   const it = items[menu.idx];
   const hadLines = menu.lines;
   clearMenu();
-  if (!it) { if (TTY) { renderIdle(); rl.prompt(); } return; }
+  if (!it) { if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } return; }
   out('\x1b[2A\r\x1b[2K'); // remove the input row; actions draw their own
   it.run();
 }
@@ -200,11 +203,11 @@ function menuEnter() {
 function commandsItems() {
   return [
     { label: 'Switch model', run: () => openModelMenu() },
-    { label: 'Agent mode: ' + (agentMode ? 'on' : 'off'), run: () => { agentMode = !agentMode; out(DIM + '  agent mode ' + (agentMode ? 'ON - file tools on, asks first (folder: ' + process.cwd() + ')' : 'off') + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } } },
-    { label: 'Effort: ' + effort, run: () => { effort = effort === 'low' ? 'medium' : effort === 'medium' ? 'high' : 'low'; out(DIM + '  effort set to ' + effort + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } } },
+    { label: 'Agent mode: ' + (agentMode ? 'on' : 'off'), run: () => { agentMode = !agentMode; out(DIM + '  agent mode ' + (agentMode ? 'ON - file tools on, asks first (folder: ' + process.cwd() + ')' : 'off') + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } },
+    { label: 'Effort: ' + effort, run: () => { effort = effort === 'low' ? 'medium' : effort === 'medium' ? 'high' : 'low'; out(DIM + '  effort set to ' + effort + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } },
     { label: 'Change UI color', run: () => openThemeMenu() },
     { label: 'Check for updates', run: () => { checkUpdates(true); } },
-    { label: 'Clear context', run: () => { convo = []; out(DIM + '  context cleared' + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } } },
+    { label: 'Clear context', run: () => { convo = []; out(DIM + '  context cleared' + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } },
     { label: 'Exit', run: () => bye() },
   ];
 }
@@ -220,14 +223,14 @@ function modelMenuItems() {
     for (const m of list) {
       const full = ns + '/' + m.id;
       if (q && !full.toLowerCase().includes(q)) continue;
-      items.push({ label: (full === model ? '\u25CF ' : '') + m.id, hint: /:free\b/.test(m.id) || m.free ? 'Free' : '', run: () => { switchModel(full); if (TTY) { renderIdle(); rl.prompt(); } } });
+      items.push({ label: (full === model ? '\u25CF ' : '') + m.id, hint: /:free\b/.test(m.id) || m.free ? 'Free' : '', run: () => { switchModel(full); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } });
     }
   };
   // current + recent first
   for (const r of [model].concat(recentModels())) {
     if (!r || r === model && items.some(i => i.label.includes(String(r).split('/').pop()))) continue;
     if (q && !r.toLowerCase().includes(q)) continue;
-    items.push({ label: (r === model ? '\u25CF ' : '') + r, hint: '', run: () => { switchModel(r); if (TTY) { renderIdle(); rl.prompt(); } } });
+    items.push({ label: (r === model ? '\u25CF ' : '') + r, hint: '', run: () => { switchModel(r); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } });
   }
   for (const ns of have) push(ns, (cat[ns] || []).slice(0, 8));
   return items;
@@ -239,7 +242,7 @@ function openThemeMenu() {
   openMenu({
     title: 'UI color', searchable: false,
     items: () => Object.keys(THEMES).map(t => ({
-      label: t, run: () => { A = THEMES[t]; saveTheme(t); out(A + '  accent color: ' + t + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } },
+      label: t, run: () => { A = THEMES[t]; saveTheme(t); out(A + '  accent color: ' + t + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } },
     })),
   });
 }
@@ -268,7 +271,7 @@ async function checkUpdates(loud) {
   } else {
     out(DIM + '  could not reach the update server yet (krait is not published, or you are offline)' + R + '\n');
   }
-  if (loud) { if (TTY) { renderIdle(); rl.prompt(); } }
+  if (loud) { if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } }
 }
 
 function switchModel(id) {
@@ -283,10 +286,14 @@ function switchModel(id) {
 }
 
 async function askPerm(req) {
+  out(Y + `\n  krait wants to use ${req.tool}${req.detail ? ': ' + req.detail : ''} - allow? [y/N] ` + R);
   const a = await subLine();
   return /^y(es)?$/i.test((a || '').trim());
 }
-async function askUser(q) { return (await subLine()).trim(); }
+async function askUser(q) {
+  out(Y + '  ' + q.question + (q.options ? ' (' + q.options.join('/') + ')' : '') + ' ' + R);
+  return (await subLine()).trim();
+}
 
 async function chatTurn(input) {
   busy = true;
@@ -323,18 +330,22 @@ async function chatTurn(input) {
 
 function bye() { out('\n' + DIM + '  bye - krait by Avepier' + R + '\n'); process.exit(0); }
 
-// ── logo (TTY) ──
+// ── logo ──
+// block letters spell K-R-A-I-T, column-verified (each letter 5 wide, 5 tall)
 function logoLines() {
   return [
-    A + B + '  \u2588\u2580\u2584\u2580\u2588 \u2588\u2580\u2588 \u2584\u2580\u2588 \u2588 \u2588\u2584\u2588' + R,
-    A + B + '  \u2588 \u2580 \u2588 \u2588\u2580\u2584 \u2588\u2580\u2588 \u2588  \u2588 ' + R,
+    A + B + '  ' + '\u2588   \u2588 \u2588\u2588\u2588\u2588   \u2588\u2588\u2588  \u2588\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2588' + R,
+    A + B + '  ' + '\u2588  \u2588  \u2588   \u2588 \u2588   \u2588   \u2588     \u2588  ' + R,
+    A + B + '  ' + '\u2588\u2588\u2588   \u2588\u2588\u2588\u2588  \u2588\u2588\u2588\u2588\u2588   \u2588     \u2588  ' + R,
+    A + B + '  ' + '\u2588  \u2588  \u2588  \u2588  \u2588   \u2588   \u2588     \u2588  ' + R,
+    A + B + '  ' + '\u2588   \u2588 \u2588   \u2588 \u2588   \u2588 \u2588\u2588\u2588\u2588\u2588   \u2588  ' + R,
   ];
 }
 function printLogo() {
   const cols = process.stdout.columns || 80;
   for (const l of logoLines()) {
-    const pad = ' '.repeat(Math.max(0, Math.floor((cols - 34) / 2)));
-    out(pad + l.replace(/^  /, '  ') + '\n');
+    const pad = ' '.repeat(Math.max(0, Math.floor((cols - 33) / 2)));
+    out(pad + l + '\n');
   }
   const ver = DIM + '  v' + VERSION + ' \u00b7 by Avepier \u00b7 free AI coding agent' + R;
   out(ver + '\n');
@@ -342,6 +353,10 @@ function printLogo() {
   if (cached && isNewer(cached, VERSION)) out(A + '  /update to install v' + cached + R + '\n');
   else out(DIM + '  /update to check for new versions' + R + '\n');
   out('\n');
+}
+// pump mode has no live status line - print it as text
+function pumpIdle() {
+  out(DIM + '  ' + statusText() + R + '\n' + DIM + '  /help for slash commands' + R + '\n\n');
 }
 
 // ── main repl ──
@@ -351,7 +366,7 @@ async function repl() {
     const line = await nextLine(promptText);
     const input = (line || '').trim();
     if (closing && !input) return bye();
-    if (!input) { if (TTY) { renderIdle(); rl.prompt(); } continue; }
+    if (!input) { if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue; }
     if (input === '/exit' || input === '/quit') return bye();
     if (input === '/help') {
       out(`${DIM}  /models          list your models
@@ -362,32 +377,32 @@ async function repl() {
   /update          check for a new krait version
   /clear           fresh context
   /exit            quit${R}\n`);
-      if (TTY) { renderIdle(); rl.prompt(); } continue;
+      if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue;
     }
-    if (input === '/clear') { convo = []; out(DIM + '  context cleared' + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } continue; }
-    if (input === '/models') { listModels(); if (TTY) { renderIdle(); rl.prompt(); } continue; }
+    if (input === '/clear') { convo = []; out(DIM + '  context cleared' + R + '\n'); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue; }
+    if (input === '/models') { listModels(); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue; }
     if (input === '/update') { await checkUpdates(true); continue; }
-    if (input.startsWith('/model ')) { switchModel(input.slice(7).trim()); if (TTY) { renderIdle(); rl.prompt(); } continue; }
+    if (input.startsWith('/model ')) { switchModel(input.slice(7).trim()); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue; }
     if (input === '/agent') {
       agentMode = !agentMode;
       out(DIM + '  agent mode ' + (agentMode ? 'ON - I can use file tools (asks first). Works in ' + process.cwd() : 'off') + R + '\n');
-      if (TTY) { renderIdle(); rl.prompt(); } continue;
+      if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue;
     }
     if (input.startsWith('/effort')) {
       const v = input.split(/\s+/)[1] || '';
       const map = { l: 'low', low: 'low', m: 'medium', medium: 'medium', h: 'high', high: 'high' };
       if (map[v]) effort = map[v]; else out(DIM + '  usage: /effort low|medium|high' + R + '\n');
-      if (TTY) { renderIdle(); rl.prompt(); } continue;
+      if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue;
     }
     if (input.startsWith('/theme')) {
       const t = input.split(/\s+/)[1];
       if (t && THEMES[t]) { A = THEMES[t]; saveTheme(t); out(A + '  accent color: ' + t + R + '\n'); }
       else out(DIM + '  usage: /theme ' + Object.keys(THEMES).join(' | ') + R + '\n');
-      if (TTY) { renderIdle(); rl.prompt(); } continue;
+      if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } continue;
     }
     await chatTurn(input);
     if (closing) return bye();
-    if (TTY) { renderIdle(); rl.prompt(); }
+    if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); }
   }
 }
 
@@ -420,6 +435,9 @@ function main() {
     renderIdle();
     rl.setPrompt('\u258C ');
     rl.prompt();
+  } else if (PUMP) {
+    printLogo();
+    pumpIdle();
   } else {
     out(DIM + 'krait v' + VERSION + ' - by Avepier - /help for commands' + R + '\n');
   }

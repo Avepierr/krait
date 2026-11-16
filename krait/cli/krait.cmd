@@ -15,6 +15,6 @@ if /i "%~1"=="app" (
   start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
   exit /b 0
 )
-set "ELECTRON_RUN_AS_NODE=1"
-"%~dp0node_modules\electron\dist\electron.exe" "%~dp0cli\krait-cli.js" %*
+rem chat (pipe or interactive console - pump.ps1 decides; electron can't read console stdin on Windows)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cli\pump.ps1" %*
 exit /b 0
