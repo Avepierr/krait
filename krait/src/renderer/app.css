@@ -275,6 +275,58 @@ body.light * { scrollbar-color: #c9c6c0 transparent; }
 /* ── AI-mistakes disclaimer ── */
 #ai-note { text-align: center; font-size: 11px; color: var(--fg3); margin-top: 8px; user-select: none; }
 
+/* ── Project tabs (sidebar) ── */
+#proj-tabs { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 4px; scrollbar-width: none; }
+#proj-tabs::-webkit-scrollbar { display: none; }
+.proj-tab { flex-shrink: 0; background: var(--bg3); border: 1px solid var(--border); color: var(--fg2); font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-tab:hover { color: var(--fg); }
+.proj-tab.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+
+/* ── Find bar (Ctrl+F) ── */
+#find-bar { position: fixed; top: 46px; right: 18px; z-index: 900; display: flex; align-items: center; gap: 6px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#find-bar.hidden { display: none; }
+#find-in { width: 200px; background: var(--bg3); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); font-size: 12.5px; padding: 6px 10px; outline: none; }
+#find-in:focus { border-color: var(--accent); }
+#find-count { font-size: 11.5px; color: var(--fg3); min-width: 60px; text-align: center; }
+#find-bar button { background: var(--bg3); border: 1px solid var(--border); color: var(--fg2); border-radius: 7px; width: 26px; height: 26px; cursor: pointer; font-size: 12px; }
+#find-bar button:hover { color: var(--fg); border-color: var(--fg3); }
+mark.find-m { background: rgba(255, 200, 60, .35); color: inherit; border-radius: 3px; padding: 0 1px; }
+mark.find-m.find-cur { background: var(--accent); color: #000; }
+
+/* ── Token popover ── */
+.tok-pop { position: absolute; bottom: 42px; right: 12px; z-index: 800; width: 250px; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+.tp-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--fg2); padding: 3px 0; }
+.tp-row b { color: var(--fg); }
+.tp-sub { margin-top: 6px; font-size: 11px; color: var(--fg3); }
+
+/* ── Revert chip (checkpoints) ── */
+.revert-bar { margin: 2px 0 4px; }
+.revert-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--fg2); font-size: 11.5px; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.revert-btn:hover { color: var(--fg); border-color: var(--accent); }
+.revert-btn:disabled { opacity: .6; cursor: default; }
+
+/* ── Preview file list ── */
+.pv-body { display: flex; gap: 10px; }
+#pv-files { width: 170px; flex-shrink: 0; overflow-y: auto; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+.pvf-item { background: transparent; border: none; color: var(--fg2); font-size: 12px; text-align: left; padding: 6px 9px; border-radius: 7px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.pvf-item:hover { background: var(--bg4); color: var(--fg); }
+.pvf-item.active { background: var(--accent); color: #000; font-weight: 700; }
+.pvf-empty { font-size: 11.5px; color: var(--fg3); padding: 8px; text-align: center; }
+
+/* ── Mic button (voice) ── */
+.round.mic { background: var(--bg3); color: var(--fg2); border: 1px solid var(--border); font-size: 16px; }
+.round.mic:hover { color: var(--accent); border-color: var(--accent); }
+.round.mic.on { background: var(--red, #e5484d); color: #fff; border-color: var(--red, #e5484d); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .7; } }
+
+/* ── Light theme contrast fixes ── */
+body.light mark.find-m { background: #ffe9a8; }
+body.light #find-bar, body.light .tok-pop, body.light .ctx-menu { box-shadow: 0 10px 30px rgba(0,0,0,.12); }
+body.light .tg-body, body.light .q-chip, body.light .ask-card { background: var(--bg3); }
+body.light .pvf-item.active { color: #fff; }
+body.light .proj-tab.active { color: #fff; }
+body.light .q-now, body.light .ask-btn { color: #fff; }
+
 /* ── Right-click context menu (chats) ── */
 .ctx-menu { position: fixed; z-index: 1000; min-width: 130px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 5px; box-shadow: 0 12px 32px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 2px; }
 .ctx-menu button { background: transparent; border: none; color: var(--fg2); text-align: left; font-size: 12.5px; padding: 7px 12px; border-radius: 6px; cursor: pointer; }

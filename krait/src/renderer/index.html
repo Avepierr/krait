@@ -30,6 +30,7 @@
       <button class="nm-item" id="nm-chat">&#43; New chat</button>
       <button class="nm-item" id="nm-projects">&#128193; Projects</button>
     </div>
+    <div id="proj-tabs"></div>
     <div id="sessions"></div>
 
     <!-- profile block, bottom-left -->
@@ -84,11 +85,19 @@
       <div class="row">
         <button id="btn-attach" class="attach-btn" title="Attach images or files (+)">&#43;</button>
         <textarea id="prompt" rows="1" placeholder="How can I help you today?"></textarea>
+        <button id="btn-mic" class="round mic" title="Voice input">&#127908;</button>
         <button id="btn-send" class="round" title="Send (Enter)">&#10148;</button>
         <button id="btn-stop" class="round stop" title="Stop" style="display:none">&#9632;</button>
       </div>
       <div id="attachments"></div>
       <div id="ai-note">krait can make mistakes &#8212; double-check important info.</div>
+    </div>
+    <div id="find-bar" class="hidden">
+      <input id="find-in" placeholder="Search in chat...">
+      <span id="find-count"></span>
+      <button id="find-prev" title="Previous (Shift+Enter)">&#8593;</button>
+      <button id="find-next" title="Next (Enter)">&#8595;</button>
+      <button id="find-close" title="Close (Esc)">&#10005;</button>
     </div>
   </main>
 
@@ -108,7 +117,7 @@
   <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
   <button class="pm-item" id="pm-mcp">&#127760; MCP servers</button>
   <div class="pm-sep"></div>
-  <div class="pm-about">krait v1.7.0 &middot; by Avepier</div>
+  <div class="pm-about">krait v1.8.0 &middot; by Avepier</div>
 </div>
 
 <!-- projects modal -->
@@ -147,7 +156,7 @@
       <button class="set-nav" data-page="skills">&#127919; Skills</button>
       <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
       <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
-      <div class="set-side-foot">krait v1.7.0 &middot; by Avepier</div>
+      <div class="set-side-foot">krait v1.8.0 &middot; by Avepier</div>
     </aside>
     <div class="set-main">
       <div class="set-page" id="page-account">
@@ -289,6 +298,7 @@
       <button id="pv-close" class="pv-close">&#10005;</button>
     </div>
     <div class="pv-body">
+      <div id="pv-files"></div>
       <iframe id="pv-frame" sandbox="allow-scripts"></iframe>
       <pre id="pv-code" style="display:none"></pre>
     </div>

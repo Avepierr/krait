@@ -275,6 +275,7 @@ function toolPrompt(enabled) {
   s += '- Ask: show the user a question in the chat and WAIT for their typed answer. Args: {"question": "your question"}\n';
   s += 'RULES for Ask: if you are missing information you genuinely need (a choice between options, a name, a path, a preference), use Ask instead of guessing. Keep the question short. Do not overuse it.';
   s += 'LANGUAGES: krait writes code in ANY language the user asks for - HTML/CSS/JS, Python, Rust, C++, C, Go, Java, C#, PHP, Ruby, Kotlin, Lua, SQL and more. Use the correct file extension for the language. To compile or run what you built, use the Bash tool (for example: python file.py, cargo run, g++ file.cpp -o app and run it, go run main.go).';
+  s += 'GIT: if the project folder is a git repository and you created or changed files, at the END of your answer offer a one-line commit message (in backticks) and ask if the user wants you to run the commit with the Bash tool. Only commit when the user says yes.';
   s += '\nPaths are relative to the project root. After using tools, give the user a short, clear answer and mention they can download created files from the card in the chat.';
   return s;
 }
@@ -489,6 +490,16 @@ async function runAgent(deps) {
       if (sendTool) sendTool({ name: call.name, input: call.input, status: 'running' });
       const out = await toolset.execute(call.name, call.input);
       if (call.name === 'Write') usedWrite = true;
+      if (call.name === 'Edit') {
+        const oerr = String((out && (out.error || out.message)) || '');
+        if (out && out.error) {
+          results.push('Tool Edit FAILED on ' + (call.input && call.input.path || '?') + ': ' + oerr +
+            '. HOW TO FIX: Read the file first (or the lines around the target), then call Edit AGAIN with old_string copied EXACTLY from the file ' +
+            '(same whitespace and indentation). Use the smallest snippet that is still unique in the file. Do not give up after one failure.');
+          if (sendTool) sendTool({ name: 'Edit', input: call.input, status: 'done', summary: 'edit failed - retry advised' });
+          continue;
+        }
+      }
       if (sendTool) sendTool({ name: call.name, input: call.input, status: 'done', summary: summarize(out) });
       results.push('Tool ' + call.name + ' result:\n' + JSON.stringify(out).slice(0, 6000));
     }

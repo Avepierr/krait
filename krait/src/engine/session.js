@@ -13,10 +13,10 @@ class SessionStore {
     fs.mkdirSync(this.sessionsDir, { recursive: true });
   }
 
-  create(name) {
+  create(name, project) {
     const id = crypto.randomUUID();
     const sessionPath = path.join(this.sessionsDir, `${id}.jsonl`);
-    const meta = { id, name: name || 'untitled', created: Date.now(), updated: Date.now() };
+    const meta = { id, name: name || 'untitled', project: project || null, created: Date.now(), updated: Date.now() };
     fs.writeFileSync(sessionPath, '', 'utf8');
     fs.writeFileSync(path.join(this.sessionsDir, `${id}.meta`), JSON.stringify(meta));
     return meta;
@@ -55,6 +55,17 @@ class SessionStore {
     try {
       const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
       meta.name = String(name || 'chat').slice(0, 60);
+      meta.updated = Date.now();
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+      return true;
+    } catch { return false; }
+  }
+
+  setPin(id, pin) {
+    const metaPath = path.join(this.sessionsDir, `${id}.meta`);
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      meta.pin = !!pin;
       meta.updated = Date.now();
       fs.writeFileSync(metaPath, JSON.stringify(meta));
       return true;

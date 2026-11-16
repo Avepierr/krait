@@ -348,7 +348,98 @@ ipcMain.handle('krait:reset-usage', () => {
 const { SessionStore } = require('./session');
 const store = new SessionStore(DATA_DIR);
 
-ipcMain.handle('krait:sessions-create', (_, name) => store.create(name));
+ipcMain.handle('krait:sessions-create', (_, name, project) => store.create(name, project));
+ipcMain.handle('krait:sessions-pin', (_, id, pin) => { store.setPin(id, pin); return true; });
+
+// ─── Checkpoints: snapshot the project before a turn, restore on demand ───
+const CHECKPOINTS_DIR = path.join(DATA_DIR, 'checkpoints');
+const CP_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '__pycache__', '.venv', 'venv', 'vendor']);
+function snapshotProject() {
+  try {
+    fs.mkdirSync(CHECKPOINTS_DIR, { recursive: true });
+    const root = activeProjectDir();
+    if (!root || !fs.existsSync(root)) return null;
+    const ts = Date.now();
+    const id = 'cp-' + ts;
+    const list = [];
+    let total = 0;
+    const walk = d => {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') && e.name !== '.env') continue;
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (CP_SKIP_DIRS.has(e.name)) continue;
+          walk(full);
+        } else if (e.isFile()) {
+          try {
+            const st = fs.statSync(full);
+            if (st.size > 2 * 1024 * 1024 || total + st.size > 40 * 1024 * 1024) continue;
+            total += st.size;
+            list.push({ path: path.relative(root, full), mtime: st.mtimeMs });
+          } catch {}
+        }
+      }
+    };
+    walk(root);
+    const files = [];
+    for (const f of list) {
+      try {
+        files.push({ path: f.path, mtime: f.mtime, b64: fs.readFileSync(path.join(root, f.path)).toString('base64') });
+      } catch {}
+    }
+    fs.writeFileSync(path.join(CHECKPOINTS_DIR, id + '.json'), JSON.stringify({ id, ts, files }));
+    // keep only the newest 30 checkpoints
+    const all = fs.readdirSync(CHECKPOINTS_DIR).filter(f => f.endsWith('.json')).sort();
+    while (all.length > 30) { try { fs.unlinkSync(path.join(CHECKPOINTS_DIR, all.shift())); } catch { break; } }
+    return id;
+  } catch { return null; }
+}
+ipcMain.handle('krait:checkpoint-save', () => snapshotProject());
+ipcMain.handle('krait:checkpoint-restore', (_, id) => {
+  try {
+    const root = activeProjectDir();
+    const data = JSON.parse(fs.readFileSync(path.join(CHECKPOINTS_DIR, String(id).replace(/[^w-]/g, '') + '.json'), 'utf8'));
+    if (!root || !fs.existsSync(root)) return { ok: false, error: 'project folder missing' };
+    let restored = 0;
+    for (const f of data.files) {
+      try {
+        const full = path.join(root, f.path);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, Buffer.from(f.b64, 'base64'));
+        restored++;
+      } catch {}
+    }
+    // remove files created AFTER the snapshot that are not part of it (what the turn added)
+    let removed = 0;
+    const known = new Set(data.files.map(f => f.path));
+    const walk = d => {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') && e.name !== '.env') continue;
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (CP_SKIP_DIRS.has(e.name)) continue;
+          walk(full);
+        } else if (e.isFile()) {
+          try {
+            const rel = path.relative(root, full);
+            if (!known.has(rel)) {
+              const st = fs.statSync(full);
+              if (st.mtimeMs > data.ts) { fs.unlinkSync(full); removed++; }
+            }
+          } catch {}
+        }
+      }
+    };
+    walk(root);
+    return { ok: true, restored, removed };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.handle('krait:sessions-append', (_, id, message) => { store.append(id, message); return true; });
 ipcMain.handle('krait:sessions-load', (_, id) => store.load(id));
 ipcMain.handle('krait:sessions-list', () => store.list());

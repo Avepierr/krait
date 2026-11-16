@@ -12,12 +12,15 @@ contextBridge.exposeInMainWorld('krait', {
   onDelta: cb => ipcRenderer.on('krait:delta', (_, d) => cb(d)),
   onThinking: cb => ipcRenderer.on('krait:thinking', (_, d) => cb(d)),
 
-  createSession: name => ipcRenderer.invoke('krait:sessions-create', name),
+  createSession: (name, project) => ipcRenderer.invoke('krait:sessions-create', name, project),
   appendSession: (id, m) => ipcRenderer.invoke('krait:sessions-append', id, m),
   loadSession: id => ipcRenderer.invoke('krait:sessions-load', id),
   listSessions: () => ipcRenderer.invoke('krait:sessions-list'),
   deleteSession: id => ipcRenderer.invoke('krait:sessions-delete', id),
+  checkpointSave: () => ipcRenderer.invoke('krait:checkpoint-save'),
+  checkpointRestore: id => ipcRenderer.invoke('krait:checkpoint-restore', id),
   renameSession: (id, name) => ipcRenderer.invoke('krait:sessions-rename', id, name),
+  pinSession: (id, pin) => ipcRenderer.invoke('krait:sessions-pin', id, pin),
   projectMemory: () => ipcRenderer.invoke('krait:project-memory'),
   gitDiff: () => ipcRenderer.invoke('krait:git-diff'),
 

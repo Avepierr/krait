@@ -53,6 +53,22 @@ const FEATURES = [
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+  // instant-start: paint the last opened chat from the cache immediately
+  try {
+    const last = JSON.parse(localStorage.getItem('krait-last-chat') || 'null');
+    if (last && Array.isArray(last.msgs) && last.msgs.length) {
+      K.sessionId = last.id;
+      K.messages = last.msgs;
+      const box = $('messages');
+      box.innerHTML = '';
+      for (const m of K.messages) {
+        const el = addMsg(m.role, '');
+        if (m.role === 'assistant') setMsgMarkdown(el, m.content);
+        else el.querySelector('.text').textContent = m.content;
+      }
+    }
+  } catch {}
+
   // theme
   if (localStorage.getItem('krait-theme') === 'light') document.body.classList.add('light');
   document.querySelectorAll('.theme-card').forEach(t => {
@@ -218,6 +234,21 @@ async function init() {
     }
   });
 
+  // find in chat + voice + token popover
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); }
+  });
+  $('find-in').addEventListener('input', runFind);
+  $('find-in').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); findJump(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Escape') { e.stopPropagation(); closeFind(); }
+  });
+  $('find-next').onclick = () => findJump(1);
+  $('find-prev').onclick = () => findJump(-1);
+  $('find-close').onclick = closeFind;
+  $('btn-mic').onclick = toggleVoice;
+  $('token-info').onclick = toggleTokPop;
+
   // keyboard shortcuts
   document.addEventListener('keydown', e => {
     if (e.ctrlKey && e.key.toLowerCase() === 'k') {
@@ -290,6 +321,7 @@ async function init() {
     window.krait.onThinking(onThinkingDelta);
     window.krait.onAskPermission(onAskPermission);
     window.krait.onTool(info => {
+      turnToolUsed = true;
       if (currentAssistant) {
         const bubble = currentAssistant.querySelector('.bubble');
         // group consecutive tool events into one collapsible "Used N Edit, Shell" block
@@ -921,7 +953,9 @@ function sanitizeFinal(text) {
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function addArtifact(bubbleEl, path) {  const name = String(path).split(/[\\/]/).pop();
+function addArtifact(bubbleEl, path) {  pvFiles.add(path);
+  if (!$('preview-modal').classList.contains('hidden')) renderPvFiles();
+  const name = String(path).split(/[\\/]/).pop();
   const card = document.createElement('div');
   card.className = 'artifact';
   card.innerHTML =
@@ -1098,6 +1132,7 @@ function openPreview(p) {
   setPvTab(true);
   clearInterval(pvPoll);
   refreshPreview();
+  renderPvFiles();
   pvPoll = setInterval(refreshPreview, 1200); // live: refreshes while the AI writes
 }
 
@@ -1237,6 +1272,18 @@ function renderQueue() {
     const x = document.createElement('span');
     x.className = 'q-x'; x.textContent = '\u00d7'; x.title = 'Remove from queue';
     x.onclick = () => { K.queue.splice(i, 1); renderQueue(); };
+    chip.draggable = true;
+    chip.ondragstart = e => { e.dataTransfer.setData('text/plain', String(i)); };
+    chip.ondragover = e => e.preventDefault();
+    chip.ondrop = e => {
+      e.preventDefault();
+      const from = Number(e.dataTransfer.getData('text/plain'));
+      if (!isNaN(from) && from !== i) {
+        const moved = K.queue.splice(from, 1)[0];
+        K.queue.splice(i, 0, moved);
+        renderQueue();
+      }
+    };
     chip.appendChild(x);
     row.appendChild(chip);
   });
@@ -1276,6 +1323,9 @@ async function regenerate() {
 async function runTurn() {
   K.streaming = true;
   resetToolGroup();
+  turnToolUsed = false;
+  let checkpointId = null;
+  try { if (window.krait && enabledTools().length) checkpointId = await window.krait.checkpointSave(); } catch {}
   const session0 = K.sessionId;   // the chat this turn belongs to (even if the user switches away)
   const bubble = addMsg('assistant', '');
   currentAssistant = bubble;
@@ -1303,6 +1353,7 @@ async function runTurn() {
       if (sameChat) K.messages.push({ role: 'assistant', content: marker });
       if (window.krait && session0) await window.krait.appendSession(session0, { role: 'assistant', content: marker });
     } else if (res.aborted) {
+      toast('Reply stopped - what it wrote stays as context. Type your correction.');
       // keep the partial answer as context so the convo stays coherent
       const t = bubble.querySelector('.text');
       const partial = (t && t.dataset.raw) ? sanitizeFinal(cleanStream(t.dataset.raw)) : '';
@@ -1332,12 +1383,16 @@ async function runTurn() {
       if (res.usage) {
         const last = res.usage.last || {};
         const outTok = (last.output != null) ? last.output : (res.usage.output != null ? res.usage.output : res.usage.total || 0);
+        const inTok2 = (last.input != null) ? last.input : (res.usage.input || 0);
         K.tokens += outTok;
+        K.outTok = (K.outTok || 0) + outTok;
+        K.inTok = (K.inTok || 0) + inTok2;
         updateTokenInfo();
       }
       if (window.krait && session0) {
         await window.krait.appendSession(session0, { role: 'assistant', content: res.text || '' });
       }
+      autoTitle(session0);
     }
   } catch (err) {
     bubble.querySelector('.text').textContent = 'Error: ' + err.message;
@@ -1348,6 +1403,7 @@ async function runTurn() {
     }
   }
 
+  if (checkpointId && turnToolUsed) addRevertChip(bubble, checkpointId);
   finishThought(); // in case the model thought but never streamed an answer
   K.streaming = false;
   $('btn-send').style.display = '';
@@ -1469,11 +1525,228 @@ function activeSkillHints() {
   return own.concat(communityHintText());
 }
 
+/* ═══════════ Find in chat (Ctrl+F) ═══════════ */
+function openFind() {
+  $('find-bar').classList.remove('hidden');
+  $('find-in').focus();
+  $('find-in').select();
+}
+function closeFind() {
+  $('find-bar').classList.add('hidden');
+  clearFindMarks();
+  $('find-count').textContent = '';
+}
+function clearFindMarks() {
+  document.querySelectorAll('#messages mark.find-m').forEach(m => {
+    const parent = m.parentNode;
+    if (!parent) return;
+    parent.replaceChild(document.createTextNode(m.textContent), m);
+    parent.normalize();
+  });
+}
+let findMatches = [];
+let findIdx = -1;
+function runFind() {
+  clearFindMarks();
+  findMatches = [];
+  findIdx = -1;
+  const q = $('find-in').value.trim().toLowerCase();
+  const count = $('find-count');
+  if (!q) { count.textContent = ''; return; }
+  const walker = document.createTreeWalker($('messages'), NodeFilter.SHOW_TEXT, {
+    acceptNode: n => n.nodeValue.toLowerCase().includes(q) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+  });
+  const targets = [];
+  while (walker.nextNode()) targets.push(walker.currentNode);
+  for (const node of targets) {
+    const text = node.nodeValue;
+    const low = text.toLowerCase();
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    let idx = low.indexOf(q);
+    while (idx >= 0) {
+      frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+      const mark = document.createElement('mark');
+      mark.className = 'find-m';
+      mark.textContent = text.slice(idx, idx + q.length);
+      frag.appendChild(mark);
+      findMatches.push(mark);
+      pos = idx + q.length;
+      idx = low.indexOf(q, pos);
+    }
+    frag.appendChild(document.createTextNode(text.slice(pos)));
+    node.parentNode.replaceChild(frag, node);
+  }
+  findJump(0);
+}
+function findJump(step) {
+  const count = $('find-count');
+  if (!findMatches.length) { count.textContent = $('find-in').value.trim() ? 'no matches' : ''; return; }
+  if (findIdx >= 0 && findMatches[findIdx]) findMatches[findIdx].classList.remove('find-cur');
+  findIdx = (findIdx + step + findMatches.length) % findMatches.length;
+  const m = findMatches[findIdx];
+  m.classList.add('find-cur');
+  m.scrollIntoView({ block: 'center' });
+  count.textContent = (findIdx + 1) + '/' + findMatches.length;
+}
+
+/* ═══════════ Voice input (mic) ═══════════ */
+let recog = null;
+let recogOn = false;
+function toggleVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Voice input is not available in this build'); return; }
+  if (recogOn && recog) { try { recog.stop(); } catch {} return; }
+  try {
+    recog = new SR();
+    recog.continuous = true;
+    recog.interimResults = true;
+    recog.lang = navigator.language || 'en-US';
+    const promptEl = $('prompt');
+    recog.onresult = e => {
+      let txt = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      promptEl.value = (promptEl.value + (promptEl.value ? ' ' : '') + txt).slice(0, 5000);
+      promptEl.dispatchEvent(new Event('input'));
+    };
+    recog.onend = () => { recogOn = false; $('btn-mic').classList.remove('on'); };
+    recog.onerror = ev => {
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') toast('Microphone blocked - allow mic access (and note voice may need an internet connection)');
+      else if (ev.error === 'network') toast('Voice input needs an internet connection');
+    };
+    recog.start();
+    recogOn = true;
+    $('btn-mic').classList.add('on');
+    toast('Listening - click the mic again to stop');
+  } catch (e) {
+    toast('Voice input failed: ' + e.message);
+  }
+}
+
+/* ═══════════ Token popover (per-chat breakdown) ═══════════ */
+let tokPop = null;
+function toggleTokPop() {
+  if (tokPop) { closeTokPop(); return; }
+  tokPop = document.createElement('div');
+  tokPop.className = 'tok-pop';
+  tokPop.innerHTML =
+    '<div class="tp-row"><span>Replies</span><b>' + Number(K.tokens || 0).toLocaleString() + ' tok</b></div>' +
+    '<div class="tp-row"><span>Prompt (sent)</span><b>' + Number(K.inTok || 0).toLocaleString() + ' tok</b></div>' +
+    '<div class="tp-row"><span>All tokens</span><b>' + Number((K.tokens || 0) + (K.inTok || 0)).toLocaleString() + ' tok</b></div>' +
+    '<div class="tp-sub">The headline counter counts reply tokens only - that is what your provider dashboard shows.</div>';
+  const el = $('token-info');
+  if (el && el.closest('#composer')) el.closest('#composer').appendChild(tokPop);
+  else document.body.appendChild(tokPop);
+  setTimeout(() => document.addEventListener('click', closeTokPop), 0);
+}
+function closeTokPop() {
+  if (tokPop) { tokPop.remove(); tokPop = null; }
+  document.removeEventListener('click', closeTokPop);
+}
+
+/* ═══════════ Checkpoints (revert files) ═══════════ */
+let turnToolUsed = false;
+function addRevertChip(bubble, id) {
+  try {
+    const holder = bubble.querySelector('.bubble') || bubble;
+    const bar = document.createElement('div');
+    bar.className = 'revert-bar';
+    const b = document.createElement('button');
+    b.className = 'revert-btn';
+    b.textContent = '\u21a9 Revert files';
+    b.title = 'Restore every project file to how it was before this reply ran';
+    b.onclick = async () => {
+      if (!window.krait) return;
+      b.disabled = true;
+      b.textContent = 'Reverting...';
+      const r = await window.krait.checkpointRestore(id);
+      if (r && r.ok) toast('Reverted ' + r.restored + ' file(s)' + (r.removed ? ', removed ' + r.removed + ' new' : ''));
+      else toast('Revert failed: ' + ((r && r.error) || 'unknown'));
+      b.disabled = false;
+      b.textContent = '\u21a9 Revert files';
+      if (pvPath) refreshPreview();
+    };
+    bar.appendChild(b);
+    holder.appendChild(bar);
+  } catch {}
+}
+
+/* ═══════════ Model-per-chat + auto title + project tabs ═══════════ */
+function chatModelMap() {
+  try { return JSON.parse(localStorage.getItem('krait-chat-model') || '{}'); } catch { return {}; }
+}
+function rememberChatModel() {
+  if (!K.sessionId || !K.model) return;
+  const m = chatModelMap();
+  m[K.sessionId] = K.model;
+  try { localStorage.setItem('krait-chat-model', JSON.stringify(m)); } catch {}
+}
+/** Name the chat after its first user message (only while the name is still default). */
+async function autoTitle(id) {
+  try {
+    if (!window.krait || !id) return;
+    const list = await window.krait.listSessions();
+    const me = list.find(x => x.id === id);
+    if (!me) return;
+    const n = String(me.name || '').toLowerCase();
+    if (!/^(chat|untitled|new chat)$/.test(n)) return;
+    const firstMsg = K.messages.find(m => m.role === 'user') || {};
+    let t = String(firstMsg.content || '').replace(/^(hey|hi|hello|please|can you|could you|krait)[, ]+/i, '').trim();
+    t = t.replace(/\s+/g, ' ').slice(0, 32).trim();
+    if (!t || t.length < 3) return;
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    await window.krait.renameSession(id, t);
+    refreshSessionList();
+  } catch {}
+}
+let projFilter = null; // null = all chats
+async function renderProjTabs() {
+  if (!window.krait) return;
+  const box = $('proj-tabs');
+  if (!box) return;
+  let p = { list: [] };
+  try { p = await window.krait.projectsGet(); } catch {}
+  box.innerHTML = '';
+  const all = document.createElement('button');
+  all.className = 'proj-tab' + (projFilter === null ? ' active' : '');
+  all.textContent = 'All chats';
+  all.title = 'Show every chat';
+  all.onclick = () => { projFilter = null; renderProjTabs(); refreshSessionList(); };
+  box.appendChild(all);
+  for (const pr of p.list) {
+    const b = document.createElement('button');
+    b.className = 'proj-tab' + (projFilter === pr.id ? ' active' : '');
+    b.textContent = pr.name;
+    b.title = 'Show chats of project ' + pr.name;
+    b.onclick = () => { projFilter = pr.id; renderProjTabs(); refreshSessionList(); };
+    box.appendChild(b);
+  }
+}
+
+/* ═══════════ Preview file list (files made this chat) ═══════════ */
+const pvFiles = new Set();
+function renderPvFiles() {
+  const box = $('pv-files');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!pvFiles.size) { box.innerHTML = '<div class="pvf-empty">No files yet</div>'; return; }
+  for (const f of pvFiles) {
+    const b = document.createElement('button');
+    b.className = 'pvf-item' + (f === pvPath ? ' active' : '');
+    b.textContent = String(f).split(/[\\/]/).pop();
+    b.title = f;
+    b.onclick = () => openPreview(f);
+    box.appendChild(b);
+  }
+}
+
 /* ═══════════ Sessions ═══════════ */
 async function ensureSession(title) {
   if (!window.krait) return;
   if (!K.sessionId) {
-    const meta = await window.krait.createSession(title || 'chat');
+    let proj = null;
+    try { proj = (await window.krait.projectsGet()).active; } catch {}
+    const meta = await window.krait.createSession(title || 'chat', proj);
     K.sessionId = meta.id;
     await refreshSessionList();
   }
@@ -1492,6 +1765,11 @@ function openChatCtx(e, s, nameSpan) {
     menu.appendChild(b);
   };
   mk('Open', () => { if (s.id !== K.sessionId) resumeSession(s.id); });
+  mk(s.pin ? 'Unpin' : 'Pin', async () => {
+    if (!window.krait) return;
+    await window.krait.pinSession(s.id, !s.pin);
+    refreshSessionList();
+  });
   mk('Rename', () => startRename(s, nameSpan));
   mk('Delete', async () => {
     await window.krait.deleteSession(s.id);
@@ -1548,14 +1826,16 @@ function startRename(s, span) {
 
 async function refreshSessionList() {
   if (!window.krait) return;
-  const list = await window.krait.listSessions();
+  let list = await window.krait.listSessions();
+  if (projFilter) list = list.filter(x => (x.project || '') === projFilter);
+  list = list.slice().sort((a, b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0));
   const box = $('sessions');
   box.innerHTML = '';
   for (const s of list.slice(0, 20)) {
     const el = document.createElement('div');
     el.className = 'session-item' + (s.id === K.sessionId ? ' active' : '');
     const name = document.createElement('span');
-    name.textContent = (s.name || 'chat').slice(0, 22);
+    name.textContent = (s.pin ? '\ud83d\udccc ' : '') + (s.name || 'chat').slice(0, 22);
     el.title = 'Open chat';
     el.onclick = () => { if (s.id !== K.sessionId) resumeSession(s.id); };
     el.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); openChatCtx(e, s, name); };
@@ -1584,7 +1864,22 @@ async function resumeSession(id) {
     resetToolGroup();
     K.sessionId = id;
     K.tokens = 0;              // tokens are counted per chat - do not carry the old chat's count over
+    K.inTok = 0;
+    K.outTok = 0;
     updateTokenInfo();
+    pvFiles.clear();
+    // model-per-chat: restore the model this chat used (silently)
+    const savedModel = chatModelMap()[id];
+    if (savedModel && savedModel !== K.model && (K.modelList || []).some(m => m.ns + '/' + m.id === savedModel)) {
+      pickModel(savedModel, (K.modelList.find(m => m.ns + '/' + m.id === savedModel) || {}).vision, true);
+    }
+    // cache for instant start next launch
+    try {
+      localStorage.setItem('krait-last-chat', JSON.stringify({
+        id,
+        msgs: K.messages.slice(-30).map(m => ({ role: m.role, content: String(m.content || '').slice(0, 4000) })),
+      }));
+    } catch {}
     // sanitize: old chats may contain raw tool-call debris - never render that
     K.messages = msgs.map(m => ({
       role: m.role,
@@ -1610,7 +1905,10 @@ function newChat() {
   K.messages = [];
   K.sessionId = null;
   K.tokens = 0;
+  K.inTok = 0;
+  K.outTok = 0;
   updateTokenInfo();
+  pvFiles.clear();
   renderWelcome();
   refreshSessionList();
 }
@@ -1674,6 +1972,7 @@ async function renderProjects() {
     el.appendChild(del);
     box.appendChild(el);
   }
+  renderProjTabs();
 }
 
 async function addProject() {
@@ -2298,7 +2597,15 @@ function profileMatches(kind) {
 /** Open the model dropdown filtered to a profile - the user picks, nothing is auto-equipped. */
 function openProfileDD(kind, label) {
   const list = profileMatches(kind);
-  if (!list.length) { toast('No model available for that profile - add a key or install Ollama'); return; }
+  if (!list.length) {
+    if (kind === 'local' && typeof showSettings === 'function') {
+      toast('No local models yet - install Ollama from Settings');
+      showSettings('account');
+    } else {
+      toast('No model available for that profile - add a key or install Ollama');
+    }
+    return;
+  }
   ddProfileFilter = new Set(list.map(m => m.ns + '/' + m.id));
   ddProfileLabel = (label || kind) + ' models';
   $('model-dd-search').value = '';
@@ -2306,11 +2613,12 @@ function openProfileDD(kind, label) {
   $('model-dd-pop').classList.remove('hidden');
 }
 
-function pickModel(full, vision) {
+function pickModel(full, vision, silent) {
   ddProfileFilter = null;
   ddProfileLabel = '';
+  rememberChatModel();
   const sel = $('model-select');
-  const notice = K.model && K.model !== full;
+  const notice = !silent && K.model && K.model !== full;
   K.model = full;
   K.vision = !!vision;
   // keep the hidden native select in sync (it is the source of truth for values)

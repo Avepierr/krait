@@ -78,6 +78,7 @@ class ToolSet {
     const newString = input.new_string;
     if (!oldString) return { error: 'old_string is required' };
     const matches = content.split(oldString).length - 1;
+    if (matches === 0) return { error: 'old_string not found in the file. Read the file (or the lines around your target) first, then retry with old_string copied EXACTLY from the file (same whitespace).' };
     if (!input.replace_all && matches > 1) return { error: `old_string appears ${matches} times; set replace_all=true or add context` };
     const newContent = input.replace_all ? content.split(oldString).join(newString) : content.replace(oldString, newString);
     fs.writeFileSync(p, newContent, 'utf8');
