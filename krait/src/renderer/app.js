@@ -2361,10 +2361,12 @@ function initAccountFlow() {
   $('auth-screen').classList.remove('hidden');
   $('auth-create').onclick = async () => {
     const u = $('auth-user').value.trim();
+    const dn = $('auth-display') ? $('auth-display').value.trim() : '';
     const p1 = $('auth-pass').value;
     const p2 = $('auth-pass2').value;
     const err = $('auth-err');
     if (!/^[\w .-]{3,20}$/.test(u)) { err.textContent = 'Username: 3-20 letters, numbers or dots.'; return; }
+    if (dn && !/^.{2,24}$/.test(dn)) { err.textContent = 'Display name: 2-24 characters.'; return; }
     if (p1.length < 4) { err.textContent = 'Password: at least 4 characters.'; return; }
     if (p1 !== p2) { err.textContent = "Passwords don't match."; return; }
     const reg = accountRegistry();
@@ -2372,7 +2374,7 @@ function initAccountFlow() {
     if (reg[u] && reg[u] !== h) { err.textContent = 'That account exists - wrong password.'; return; }
     reg[u] = h;
     localStorage.setItem('krait-accounts', JSON.stringify(reg));
-    localStorage.setItem('krait-account', JSON.stringify({ user: u, hash: h, onboarded: false, created: Date.now(), answers: {} }));
+    localStorage.setItem('krait-account', JSON.stringify({ user: u, name: dn || u, hash: h, onboarded: false, created: Date.now(), answers: {} }));
     $('auth-screen').classList.add('hidden');
     err.textContent = '';
     toast('Signed in as ' + u);
@@ -2471,7 +2473,7 @@ function postThread() {
   if (!title || !body) { toast('Add a title and a message'); return; }
   const acc = getAccount();
   const threads = loadForums();
-  threads.unshift({ id: 'th-' + Date.now(), author: (acc && acc.user) || 'guest', title, body, ts: Date.now(), replies: [] });
+  threads.unshift({ id: 'th-' + Date.now(), author: (acc && (acc.name || acc.user)) || 'guest', title, body, ts: Date.now(), replies: [] });
   localStorage.setItem('krait-forums', JSON.stringify(threads.slice(0, 100)));
   $('fm-title').value = '';
   $('fm-body').value = '';
@@ -2518,7 +2520,7 @@ function renderForums() {
       const me = all.find(x => x.id === th.id);
       if (me) {
         me.replies = me.replies || [];
-        me.replies.push({ author: (acc && acc.user) || 'guest', text: t, ts: Date.now() });
+        me.replies.push({ author: (acc && (acc.name || acc.user)) || 'guest', text: t, ts: Date.now() });
         localStorage.setItem('krait-forums', JSON.stringify(all));
         renderForums();
       }
