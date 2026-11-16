@@ -435,12 +435,89 @@ function addNotice(html) {
   scrollDown();
 }
 
+/** Find a Write call in the raw stream (any of the 3 formats) and return {path, content}. */
+function extractLiveWrite(raw) {
+  const s = String(raw);
+  let m;
+  // fenced tool block format
+  const fence = /```tool\s*\n?([\s\S]*?)```/g;
+  while ((m = fence.exec(s)) !== null) {
+    try {
+      const j = JSON.parse(m[1].trim());
+      if (j && j.name === 'Write' && j.input && j.input.path) return { path: j.input.path, content: j.input.content || '' };
+    } catch {}
+  }
+  // tag-wrapped format (with JSON or parameter tags inside)
+  const re = new RegExp(XML_RE_OPEN.source, 'g');
+  let last = null;
+  while ((m = re.exec(s)) !== null) last = m;
+  if (last) {
+    const rest = s.slice(last.index + last[0].length);
+    const end = rest.indexOf(XML_CLOSE_STR);
+    const body = rest.slice(0, end === -1 ? rest.length : end);
+    const name = (last[1] || last[2] || '').trim();
+    const pre = new RegExp(XML_RE_PARAM.source, 'g');
+    const tags = [];
+    let a;
+    while ((a = pre.exec(body)) !== null) tags.push(a);
+    if (tags.length) {
+      let path = '', content = '';
+      for (let i = 0; i < tags.length; i++) {
+        const key = tags[i][1] || tags[i][2] || '';
+        const vs = tags[i].index + tags[i][0].length;
+        const ve = i + 1 < tags.length ? tags[i + 1].index : body.length;
+        let v = body.slice(vs, ve);
+        if (v.startsWith('\n')) v = v.slice(1);
+        if (key === 'path' || key === 'file_path') path = v;
+        else if (key === 'content' || key === 'file_text') content = v;
+      }
+      if (path && (name === 'Write' || content)) return { path, content };
+      return null;
+    }
+    // JSON body (may be mid-stream: content string unterminated)
+    const bare = body.trim();
+    let j = null;
+    try { j = JSON.parse(bare); } catch {}
+    if (!j) {
+      const i0 = bare.indexOf('{'), i1 = bare.lastIndexOf('}');
+      if (i0 >= 0 && i1 > i0) { try { j = JSON.parse(bare.slice(i0, i1 + 1)); } catch {} }
+    }
+    if (j) {
+      const inp = (j.name && j.input) ? j.input : j;
+      const nm = j.name || name;
+      if (inp.path && (nm === 'Write' || /\.html?\b/i.test(inp.path))) return { path: inp.path, content: inp.content || '' };
+    } else {
+      // partial JSON while streaming: pull path + content with tolerant regexes
+      const pm = /"path"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(bare);
+      const cm = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(bare);
+      if (pm) {
+        let path = pm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        let content = cm ? cm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t') : '';
+        return { path, content };
+      }
+    }
+  }
+  return null;
+}
+
+/** Feed streamed Write content into the collapsible live block (click to view codes). */
+function liveWriteFeed(raw) {
+  const w = extractLiveWrite(raw);
+  if (!w || !w.path) return;
+  const b = addWriteBlock(w.path);
+  if (!b || b.done) return;
+  const pre = b.el.querySelector('.w-code');
+  const lines = String(w.content || '').split('\n');
+  pre.textContent = lines.length > 40 ? '...\n' + lines.slice(-40).join('\n') : w.content;
+  pre.scrollTop = pre.scrollHeight;
+}
 function appendDelta(d) {
   if (!currentAssistant) return;
   if (thoughtEl) finishThought(); // answer started → collapse the thought block
   const t = currentAssistant.querySelector('.text');
   if (!t.dataset.raw) t.dataset.raw = '';
   t.dataset.raw += d;
+  liveWriteFeed(t.dataset.raw);
   setMsgMarkdown(currentAssistant, cleanStream(t.dataset.raw));
 }
 

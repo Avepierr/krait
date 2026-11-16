@@ -14,8 +14,11 @@ const path = require('path');
 const { app, nativeImage } = require('electron');
 
 const root = path.resolve(__dirname, '..');
-const src = path.join(root, 'assets', 'icon.png');
+const src = path.join(root, 'assets', 'logo-trim.png');
 const out = path.join(root, 'assets', 'krait.ico');
+
+// also keep a copy where the shortcuts look for it (krait\assets\)
+const outCopy = path.join(root, 'krait', 'assets', 'krait.ico');
 
 function dibEntry(img, size) {
   // Electron gives BGRA top-down; ICO expects BGRA bottom-up + an AND mask.
@@ -80,7 +83,12 @@ app.whenReady().then(() => {
   });
 
   fs.writeFileSync(out, Buffer.concat([header, dir, ...entries.map(e => e.data)]));
+  try {
+    fs.mkdirSync(path.dirname(outCopy), { recursive: true });
+    fs.writeFileSync(outCopy, fs.readFileSync(out));
+  } catch {}
   const st = fs.statSync(out);
   console.log('ICO written:', out, st.size, 'bytes,', entries.length, 'sizes (16-256)');
+  console.log('ICO copy at:', outCopy);
   app.quit();
 });

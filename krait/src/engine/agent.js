@@ -61,6 +61,25 @@ function parseXmlToolBlocks(text) {
         if (key) args[key] = v;
       }
     }
+    // some models put the args as a plain JSON object inside the tag body
+    {
+      const bare = body.replace(new RegExp(XML_PARAM_RE.source, 'g'), '').trim();
+      let j = null;
+      try { j = JSON.parse(bare); } catch {}
+      if (!j && bare.includes('{')) {
+        const s0 = bare.indexOf('{'), s1 = bare.lastIndexOf('}');
+        if (s0 >= 0 && s1 > s0) { try { j = JSON.parse(bare.slice(s0, s1 + 1)); } catch {} }
+      }
+      if (j && typeof j === 'object' && !Array.isArray(j)) {
+        // either {"name": "...", "input": {...}} or a raw args object {"path": "..."}
+        const flat = (j.name && j.input && typeof j.input === 'object') ? j.input : j;
+        for (const [k, v] of Object.entries(flat)) {
+          const kk = (k === 'file_path' || k === 'file' || k === 'filename') ? 'path'
+            : (k === 'file_text' || k === 'new_content') ? 'content' : k;
+          if (args[kk] === undefined && typeof v === 'string') args[kk] = v;
+        }
+      }
+    }
     const keys = Object.keys(args);
     let name = KNOWN_TOOLS.has(rawName) ? rawName : null;
     if (!name) {
