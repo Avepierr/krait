@@ -3,8 +3,8 @@ $ErrorActionPreference = "Stop"
 $kraitDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Write-Output "Installing krait from: $kraitDir"
 
-# 1. build the .ico from the logo
-node (Join-Path $kraitDir "make-ico.js")
+# 1. build the .ico from the logo (needs Electron for resizing)
+& (Join-Path $kraitDir "node_modules\electron\dist\electron.exe") (Join-Path $kraitDir "make-ico.js")
 
 # 2. write the launcher with the real path baked in
 $vbs = Join-Path $kraitDir "krait-launch.vbs"

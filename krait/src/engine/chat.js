@@ -99,8 +99,9 @@ function parseDataUrl(dataUrl) {
  */
 async function streamChat(modelId, messages, onDelta, signal, opts) {
   const { ns, model } = splitModel(modelId);
-  const key = keychain().get(ns);
-  if (!key) throw new Error('No API key saved for ' + ns + '. Click the gear in the title bar to add one.');
+  const key = keychain().get(ns) || (ns === 'ollama' ? 'local' : null);
+  const KEYLESS = new Set(['ollama']);
+  if (!key && !KEYLESS.has(ns)) throw new Error('No API key saved for ' + ns + '. Click the gear in the title bar to add one.');
   if (!model) throw new Error('No model selected.');
 
   const sys = buildSystem(opts);
@@ -154,6 +155,8 @@ async function streamChat(modelId, messages, onDelta, signal, opts) {
       mistral: 'https://api.mistral.ai/v1',
       huggingface: 'https://router.huggingface.co/v1',
       github: 'https://models.github.ai/inference',
+      opencode: 'https://opencode.ai/inference/openai/v1',
+      ollama: 'http://localhost:11434/v1',
     };
     let base = BASE_URLS[ns];
     if (!base) {

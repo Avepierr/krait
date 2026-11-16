@@ -89,7 +89,7 @@
   <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
   <button class="pm-item" id="pm-mcp">&#127760; MCP servers</button>
   <div class="pm-sep"></div>
-  <div class="pm-about">krait v1.2.0 &middot; by Avepier</div>
+  <div class="pm-about">krait v1.3.0 &middot; by Avepier</div>
 </div>
 
 <!-- projects modal -->
@@ -128,7 +128,7 @@
       <button class="set-nav" data-page="skills">&#127919; Skills</button>
       <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
       <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
-      <div class="set-side-foot">krait v1.2.0 &middot; by Avepier</div>
+      <div class="set-side-foot">krait v1.3.0 &middot; by Avepier</div>
     </aside>
     <div class="set-main">
       <div class="set-page" id="page-account">
@@ -177,9 +177,21 @@
           <label>GitHub Models (your GitHub token) <a href="https://github.com/settings/tokens" target="_blank">get token</a>
             <input id="k-github" type="password" placeholder="ghp_...">
           </label>
+          <label>OpenCode Zen <a href="https://opencode.ai/console" target="_blank">get key</a>
+            <input id="k-opencode" type="password" placeholder="opencode key">
+          </label>
           <div id="key-saved"></div>
           <button type="submit" class="key-start">Save keys &#10148;</button>
         </form>
+
+        <div class="model-refresh">
+          <button id="models-refresh" class="conn-btn on">&#8635; Refresh model lists</button>
+          <span id="models-status" class="key-sub" style="margin:0"></span>
+        </div>
+        <p class="key-sub" style="margin-top:8px">Pulls every free/live model straight from your providers (OpenRouter free models, all of NVIDIA, Groq, Cerebras, Mistral, HuggingFace, GitHub, OpenCode Zen, and any local Ollama models).</p>
+
+        <h3 style="margin-top:18px">Local AI with Ollama (free, runs on your PC)</h3>
+        <p class="key-sub">Install <a href="https://ollama.com/download" target="_blank">Ollama</a>, run e.g. <code>ollama pull qwen3:8b</code>, then click Refresh above — your local models show up in the model menu as <b>Ollama (local, free)</b>. No key needed.</p>
 
         <h3 style="margin-top:22px">Your own provider</h3>
         <p class="key-sub">Have any OpenAI-compatible API (a router, a local server, anything)? Give it your own name and it shows up in the model picker.</p>

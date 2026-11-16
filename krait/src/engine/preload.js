@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('krait', {
   providersAdd: (id, cfg) => ipcRenderer.invoke('krait:providers-add', id, cfg),
   providersDelete: id => ipcRenderer.invoke('krait:providers-delete', id),
 
+  modelsGet: () => ipcRenderer.invoke('krait:models-get'),
+  modelsRefresh: () => ipcRenderer.invoke('krait:models-refresh'),
+
   onAskPermission: cb => ipcRenderer.on('krait:ask-permission', (_, req) => cb(req)),
   permissionResponse: (id, choice) => ipcRenderer.invoke('krait:permission-response', id, choice),
 

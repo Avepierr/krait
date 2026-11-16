@@ -183,9 +183,23 @@ async function init() {
   $('key-form').onsubmit = saveKeys;
   const cpAdd = $('cp-add');
   if (cpAdd) cpAdd.onclick = addCustomProvider;
+  const refreshBtn = $('models-refresh');
+  if (refreshBtn) refreshBtn.onclick = refreshModels;
   const keys = window.krait ? await window.krait.getMaskedKeys() : {};
   if (Object.keys(keys).length === 0) showSettings('keys'); else closeKeys();
-  fillModelSelect(keys);
+  await fillModelSelect(keys);
+
+  // keep the model catalog fresh in the background (once every 12 hours)
+  if (window.krait) {
+    window.krait.modelsGet().then(c => {
+      if (!c.ts || Date.now() - c.ts > 12 * 3600 * 1000) {
+        window.krait.modelsRefresh()
+          .then(() => window.krait.getMaskedKeys())
+          .then(k => fillModelSelect(k))
+          .catch(() => {});
+      }
+    }).catch(() => {});
+  }
 
   // memory + tool activity
   if (window.krait) {
@@ -826,7 +840,7 @@ async function showUsage() {
 async function saveKeys(e) {
   e.preventDefault();
   if (!window.krait) return;
-  for (const p of ['gemini', 'openrouter', 'nvidia', 'anthropic', 'groq', 'cerebras', 'mistral', 'huggingface', 'github']) {
+  for (const p of ['gemini', 'openrouter', 'nvidia', 'anthropic', 'groq', 'cerebras', 'mistral', 'huggingface', 'github', 'opencode']) {
     const el = $('k-' + p);
     if (el && el.value.trim()) {
       await window.krait.saveKey(p, el.value.trim());
@@ -843,6 +857,20 @@ async function saveKeys(e) {
 }
 
 /* ═══════════ Your own providers (custom name + base URL) ═══════════ */
+async function refreshModels() {
+  const btn = $('models-refresh');
+  const st = $('models-status');
+  if (!window.krait || !btn) return;
+  btn.disabled = true; btn.textContent = '\u21bb Refreshing...'; st.textContent = '';
+  const r = await window.krait.modelsRefresh();
+  btn.disabled = false; btn.textContent = '\u21bb Refresh model lists';
+  if (r.error) { st.textContent = 'Failed: ' + r.error; return; }
+  const counts = Object.entries(r.data || {}).map(([k, v]) => k + ' ' + v.length).join(' \u00b7 ');
+  st.textContent = counts ? 'Updated: ' + counts : 'Nothing found \u2014 check your keys / Ollama';
+  const keys = await window.krait.getMaskedKeys();
+  fillModelSelect(keys);
+  toast('Model lists updated');
+}
 function renderCustomProviders(keys) {
   const box = $('cp-list');
   if (!box || !window.krait) return;
@@ -1104,17 +1132,40 @@ async function fillModelSelect(keys) {
     ],
   };
 
+  const PROVIDER_LABEL = {
+    openrouter: 'OpenRouter (free)', nvidia: 'NVIDIA', gemini: 'Gemini', groq: 'Groq',
+    cerebras: 'Cerebras', mistral: 'Mistral', huggingface: 'HuggingFace', github: 'GitHub Models',
+    opencode: 'OpenCode Zen', anthropic: 'Anthropic', ollama: 'Ollama (local, free)',
+  };
+
+  // static fallbacks (used only when a live catalog isn't available for that provider)
+  const cat = new Map();
+  for (const [ns, list] of Object.entries(groups)) {
+    cat.set(ns, list.map(([id, name, vision]) => ({ id, name, vision })));
+  }
+
+  // live catalog wins: every free model, always up to date
+  let live = { data: {} };
+  if (window.krait) { try { live = await window.krait.modelsGet(); } catch {} }
+  const liveData = (live && live.data) || {};
+  for (const [ns, list] of Object.entries(liveData)) {
+    if (Array.isArray(list) && list.length) cat.set(ns, list);
+  }
+
   let any = false;
-  for (const [ns, models] of Object.entries(groups)) {
-    if (!keys[ns]) continue;
+  for (const [ns, models] of cat) {
+    const needsKey = ns !== 'ollama';
+    // ollama shows up only when it's installed/has models (live catalog), no key needed
+    if (needsKey && !keys[ns]) continue;
+    if (!needsKey && !(liveData.ollama && liveData.ollama.length)) continue;
     any = true;
     const og = document.createElement('optgroup');
-    og.label = ns;
-    for (const [id, name, vision] of models) {
+    og.label = (PROVIDER_LABEL[ns] || ns) + (liveData[ns] ? '' : ' — built-in list');
+    for (const m of models) {
       const o = document.createElement('option');
-      o.value = ns + '/' + id;
-      o.textContent = name + (vision ? ' (vision)' : '');
-      o.dataset.vision = vision ? '1' : '0';
+      o.value = ns + '/' + m.id;
+      o.textContent = m.name + (m.vision && !/vision/i.test(m.name) ? ' (vision)' : '');
+      o.dataset.vision = m.vision ? '1' : '0';
       og.appendChild(o);
     }
     sel.appendChild(og);

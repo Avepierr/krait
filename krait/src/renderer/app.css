@@ -98,6 +98,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .thought .th-body { display: none; margin-top: 6px; padding: 10px 14px; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; font-size: 12px; color: var(--fg2); white-space: pre-wrap; max-height: 360px; overflow-y: auto; line-height: 1.5; }
 .thought.open .th-body { display: block; }
 
+/* ── Scrollbars: thin, dark, krait-styled (no more Windows gray slab) ── */
+* { scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg3); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+body.light ::-webkit-scrollbar-thumb { background: #c9c6c0; background-clip: padding-box; }
+body.light * { scrollbar-color: #c9c6c0 transparent; }
+
 /* ── Titlebar brand clickable ── */
 #brand-icon, .tb-name { -webkit-app-region: no-drag; cursor: pointer; }
 

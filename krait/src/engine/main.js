@@ -32,7 +32,107 @@ function recordUsage(provider, u) {
   try { fs.writeFileSync(USAGE_FILE, JSON.stringify(all, null, 2)); } catch {}
 }
 
-// ─── Projects (each project = a folder the AI works in) ───
+// ─── Live model catalogs (all providers, cached) ───
+const MODELS_FILE = path.join(DATA_DIR, 'models.json');
+
+function loadModelCache() {
+  try { return JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8')); }
+  catch { return { ts: 0, data: {} }; }
+}
+function saveModelCache(c) {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(MODELS_FILE, JSON.stringify(c)); } catch {}
+}
+
+const VISION_RE = /(vl|vision|omni|pixtral|scout|gpt-4o\b|multimodal)/i;
+const looksVision = id => VISION_RE.test(id);
+
+async function getJson(url, key) {
+  const headers = { Accept: 'application/json' };
+  if (key) headers.Authorization = 'Bearer ' + key;
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+/** Fetch live model lists for every provider that has a key (+ OpenRouter/NVIDIA public). */
+async function refreshModelCatalog() {
+  const kc = new Keychain(DATA_DIR);
+  const key = p => { try { return kc.get(p); } catch { return null; } };
+  const out = {};
+
+  const jobs = {
+    // OpenRouter: public list — keep the FREE ones only (that's what the user wants)
+    openrouter: async () => {
+      const j = await getJson('https://openrouter.ai/api/v1/models');
+      return (j.data || [])
+        .filter(m => m.id.endsWith(':free'))
+        .map(m => ({
+          id: m.id,
+          name: (m.name || m.id).replace(/\s*\(free\)\s*$/i, '') + ' (free)',
+          vision: !!(m.architecture && (m.architecture.input_modalities || []).includes('image')),
+        }));
+    },
+    // NVIDIA: public list, all models
+    nvidia: async () => {
+      const j = await getJson('https://integrate.api.nvidia.com/v1/models', key('nvidia'));
+      return (j.data || []).map(m => ({ id: m.id, name: m.id, vision: looksVision(m.id) }));
+    },
+    groq: async () => {
+      const j = await getJson('https://api.groq.com/openai/v1/models', key('groq'));
+      return (j.data || []).map(m => ({ id: m.id, name: m.id, vision: looksVision(m.id) }));
+    },
+    cerebras: async () => {
+      const j = await getJson('https://api.cerebras.ai/v1/models', key('cerebras'));
+      return (j.data || []).map(m => ({ id: m.id, name: m.id, vision: looksVision(m.id) }));
+    },
+    mistral: async () => {
+      const j = await getJson('https://api.mistral.ai/v1/models', key('mistral'));
+      return (j.data || []).filter(m => !/embed/i.test(m.id)).map(m => ({ id: m.id, name: m.id, vision: looksVision(m.id) }));
+    },
+    huggingface: async () => {
+      const j = await getJson('https://router.huggingface.co/v1/models', key('huggingface'));
+      return (j.data || []).map(m => ({ id: m.id, name: m.id, vision: looksVision(m.id) }));
+    },
+    github: async () => {
+      const j = await getJson('https://models.github.ai/catalog/models', key('github'));
+      const list = Array.isArray(j) ? j : (j.data || j.models || []);
+      return list.map(m => ({ id: m.id || m.name, name: m.name || m.id, vision: looksVision(m.id || m.name) }))
+        .filter(m => m.id);
+    },
+    opencode: async () => {
+      const k = key('opencode');
+      if (!k) return [];
+      const j = await getJson('https://opencode.ai/inference/v1/models', k);
+      const list = Array.isArray(j) ? j : (j.data || j.models || []);
+      return list.map(m => {
+        const id = m.id || m.name;
+        return { id, name: (m.name || id) + (/free/i.test(id) ? ' (free)' : ''), vision: looksVision(id) };
+      }).filter(m => m.id);
+    },
+    ollama: async () => {
+      const j = await getJson('http://localhost:11434/api/tags');
+      return (j.models || []).map(m => ({ id: m.name, name: m.name + ' (local)', vision: looksVision(m.name) }));
+    },
+  };
+
+  const entries = Object.entries(jobs);
+  const results = await Promise.allSettled(entries.map(([, fn]) => fn()));
+  entries.forEach(([ns], i) => {
+    const r = results[i];
+    if (r.status === 'fulfilled' && r.value && r.value.length) out[ns] = r.value;
+  });
+
+  const cache = { ts: Date.now(), data: out };
+  saveModelCache(cache);
+  return cache;
+}
+
+ipcMain.handle('krait:models-get', () => loadModelCache());
+ipcMain.handle('krait:models-refresh', async () => {
+  try { return await refreshModelCatalog(); }
+  catch (e) { return { ts: 0, data: {}, error: String(e && e.message || e) }; }
+});
+
 function loadProjects() {
   try { return JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8')); }
   catch { return { active: null, list: [] }; }
