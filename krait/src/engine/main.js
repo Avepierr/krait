@@ -290,14 +290,18 @@ function pickFallbackModel(failedNs) {
   try { have = Object.keys(new Keychain(DATA_DIR).list()); } catch {}
   const cached = loadModelCache().data || {};
   // NOTE: no ollama here - it is a local server; if it is not running, fallback must not try it
-  const want = ['nvidia', 'groq', 'cerebras', 'gemini', 'openrouter', 'mistral', 'huggingface', 'github'];
+  // openrouter first: the most reliable free model ids. nvidia is LAST - some of its
+  // catalog ids 404 on the endpoint, so it must never be the first thing we fall back to.
+  const want = ['openrouter', 'gemini', 'groq', 'cerebras', 'mistral', 'huggingface', 'github', 'nvidia'];
   for (const p of want) {
     if (p === failedNs) continue;
     const hasKey = have.includes(p);
     const list = cached[p];
     if (!hasKey || !Array.isArray(list) || !list.length) continue;
     // prefer a solid instruct model
-    const pick = list.find(m => /coder|instruct|70b|8b|flash|ultra/i.test(m.id)) || list[0];
+    const stable = list.filter(m => !/preview|beta|exp|\brc\b|dev/i.test(m.id));
+    const pool = stable.length ? stable : list;
+    const pick = pool.find(m => /coder|instruct|70b|8b|flash|ultra/i.test(m.id)) || pool[0];
     return p + '/' + pick.id;
   }
   return null;

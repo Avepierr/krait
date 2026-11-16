@@ -319,6 +319,76 @@ mark.find-m.find-cur { background: var(--accent); color: #000; }
 .round.mic.on { background: var(--red, #e5484d); color: #fff; border-color: var(--red, #e5484d); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .7; } }
 
+/* ── Forums ── */
+.fm-box { width: 640px; }
+.fm-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.fm-tab { background: var(--bg3); border: 1px solid var(--border); color: var(--fg2); font-size: 12.5px; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+.fm-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.fm-new { display: flex; gap: 6px; margin-bottom: 12px; }
+.fm-new input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); font-size: 12.5px; padding: 8px 10px; outline: none; }
+.fm-new input:focus { border-color: var(--accent); }
+.fm-new select { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); font-size: 12.5px; padding: 8px; outline: none; }
+.fm-thread { background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.fm-t-head { display: flex; align-items: baseline; gap: 8px; }
+.fm-t-head b { color: var(--fg); font-size: 13px; }
+.fm-t-by { font-size: 11px; color: var(--fg3); }
+.fm-t-body { font-size: 12.5px; color: var(--fg2); margin: 5px 0; white-space: pre-wrap; }
+.fm-reply { font-size: 12px; color: var(--fg2); background: var(--bg4); border-radius: 7px; padding: 5px 8px; margin: 4px 0; }
+.fm-rrow { display: flex; gap: 6px; margin-top: 7px; }
+.fm-rrow input { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); font-size: 12px; padding: 6px 9px; outline: none; }
+.fm-foot { margin-top: 10px; font-size: 11px; color: var(--fg3); text-align: center; }
+
+/* ── Collaboration ── */
+.col-row { display: flex; align-items: center; gap: 6px; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.col-who { flex: 1; font-size: 12.5px; color: var(--fg); min-width: 120px; }
+.col-perm { font-size: 10.5px; border-radius: 999px; padding: 2px 8px; margin-left: 6px; }
+.col-perm.view { background: rgba(0,150,110,.18); color: var(--accent); }
+.col-perm.edit { background: rgba(230,140,30,.2); color: #e08c1e; }
+.col-view { background: var(--bg3); border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.col-view b { font-size: 12.5px; color: var(--fg); }
+.col-msgs { margin: 7px 0; max-height: 180px; overflow-y: auto; }
+.col-msgs div { font-size: 12px; color: var(--fg2); padding: 3px 0; border-bottom: 1px dashed var(--border); }
+
+/* ── Login / onboarding overlays ── */
+#auth-screen, #onboard-screen { position: fixed; inset: 0; z-index: 950; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+#auth-screen.hidden, #onboard-screen.hidden { display: none; }
+.auth-box, .ob-box { width: 380px; max-width: 92vw; background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 30px 28px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.auth-logo { width: 46px; height: 46px; border-radius: 10px; margin-bottom: 10px; }
+.auth-box h1, .ob-box h1 { font-size: 19px; color: var(--fg); margin-bottom: 6px; }
+.auth-sub { font-size: 12.5px; color: var(--fg3); margin-bottom: 16px; }
+.auth-box input { display: block; width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 9px; color: var(--fg); font-size: 13px; padding: 10px 12px; outline: none; margin-bottom: 9px; box-sizing: border-box; }
+.auth-box input:focus { border-color: var(--accent); }
+.auth-err { font-size: 12px; color: var(--red, #e5484d); min-height: 16px; margin-bottom: 6px; }
+.auth-btn { width: 100%; background: var(--accent); color: #fff; border: none; border-radius: 9px; font-size: 13.5px; font-weight: 700; padding: 11px; cursor: pointer; }
+.auth-btn:hover { filter: brightness(1.1); }
+.auth-foot { margin-top: 14px; font-size: 11px; color: var(--fg3); }
+
+/* ── Onboarding options ── */
+#ob-opts { display: flex; flex-direction: column; gap: 7px; margin: 14px 0; }
+.ob-opt { background: var(--bg3); border: 1px solid var(--border); color: var(--fg); font-size: 13px; text-align: left; padding: 11px 14px; border-radius: 10px; cursor: pointer; }
+.ob-opt:hover { border-color: var(--accent); }
+.ob-opt.active { border-color: var(--accent); background: rgba(0,150,110,.12); }
+.ob-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+#ob-step { font-size: 11.5px; color: var(--fg3); }
+
+/* ── Terminal command menu ── */
+#term-menu { position: absolute; left: 12px; right: 12px; bottom: 46px; background: var(--bg2); border: 1px solid var(--accent); border-radius: 12px; padding: 8px; box-shadow: 0 12px 34px rgba(0,0,0,.45); z-index: 60; }
+#term-menu.hidden { display: none; }
+.tm-title { font-size: 11.5px; color: var(--fg3); padding: 4px 8px 8px; }
+.tm-opt { display: block; width: 100%; text-align: left; background: var(--bg3); border: 1px solid var(--border); color: var(--fg); font-size: 12.5px; padding: 9px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; }
+.tm-opt:hover { border-color: var(--accent); background: var(--bg4); }
+.tm-num { display: inline-block; width: 18px; height: 18px; line-height: 18px; text-align: center; background: var(--accent); color: #fff; border-radius: 50%; font-size: 10.5px; font-weight: 700; margin-right: 6px; }
+
+/* ── Mini dialog (create skill/plugin) ── */
+.mini-dlg { position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%); z-index: 960; width: 320px; max-width: 90vw; background: var(--bg2); border: 1px solid var(--accent); border-radius: 12px; padding: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+.md-title { font-size: 13px; font-weight: 700; color: var(--fg); margin-bottom: 9px; }
+.mini-dlg input { display: block; width: 100%; box-sizing: border-box; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); font-size: 12.5px; padding: 9px 11px; outline: none; margin-bottom: 8px; }
+.md-row { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* ── Skill actions row ── */
+.sk-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+#skills-discover { margin-bottom: 12px; }
+
 /* ── Light theme contrast fixes ── */
 body.light mark.find-m { background: #ffe9a8; }
 body.light #find-bar, body.light .tok-pop, body.light .ctx-menu { box-shadow: 0 10px 30px rgba(0,0,0,.12); }

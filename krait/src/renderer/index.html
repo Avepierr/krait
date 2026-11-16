@@ -14,9 +14,8 @@
   </div>
   <div class="tb-drag"></div>
   <div class="tb-right">
-    <button id="btn-mcp" class="tb-btn" title="MCP servers">&#128268; MCP</button>
     <button id="btn-terminal" class="tb-btn" title="Terminal">&gt;_</button>
-    <button id="btn-settings" class="tb-btn" title="Settings">&#9881;</button>
+    <button id="btn-search" class="tb-btn" title="Search in chat">&#128269;</button>
     <button id="btn-min" class="tb-btn" title="Minimize">&#9472;</button>
     <button id="btn-max" class="tb-btn" title="Maximize">&#9634;</button>
     <button id="btn-close" class="tb-btn tb-close" title="Close">&#10005;</button>
@@ -103,6 +102,7 @@
 
   <aside id="terminal" class="hidden">
     <div id="term-out"></div>
+    <div id="term-menu" class="hidden"></div>
     <input id="term-in" placeholder="$ command" spellcheck="false" autocomplete="off">
   </aside>
 </div>
@@ -110,14 +110,69 @@
 <!-- profile menu -->
 <div id="profile-menu" class="hidden">
   <button class="pm-item" id="pm-settings">&#9881; Settings</button>
-  <button class="pm-item" id="pm-projects">&#128193; Projects</button>
+  <button class="pm-item" id="pm-forums">&#128483; Forums</button>
   <button class="pm-item" id="pm-export">&#8681; Export chat</button>
-  <button class="pm-item" id="pm-plugins">&#129518; Plugins</button>
-  <button class="pm-item" id="pm-skills">&#127919; Skills</button>
-  <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
-  <button class="pm-item" id="pm-mcp">&#127760; MCP servers</button>
   <div class="pm-sep"></div>
-  <div class="pm-about">krait v1.8.0 &middot; by Avepier</div>
+  <div class="pm-about">krait v1.9.0 &middot; by Avepier</div>
+</div>
+
+<!-- forums modal (threads + collaboration) -->
+<div id="forums-screen" class="modal">
+  <div class="modal-box fm-box">
+    <button class="modal-close" id="forums-close">&#10005;</button>
+    <h1>Forums</h1>
+    <div class="fm-tabs">
+      <button class="fm-tab active" data-ftab="threads">Threads</button>
+      <button class="fm-tab" data-ftab="collab">Collaboration</button>
+    </div>
+    <div id="fm-threads">
+      <div class="fm-new">
+        <input id="fm-title" placeholder="Thread title">
+        <input id="fm-body" placeholder="Say something...">
+        <button id="fm-post" class="conn-btn on">Post</button>
+      </div>
+      <div id="fm-list"></div>
+    </div>
+    <div id="fm-collab" style="display:none">
+      <p class="key-sub">Work on a project with others. Everyone gets their own chat - you choose who can view or edit your work.</p>
+      <div class="fm-new">
+        <input id="col-user" placeholder="Add a user by username">
+        <select id="col-perm"><option value="view">Can view</option><option value="edit">Can edit</option></select>
+        <button id="col-add" class="conn-btn on">Add</button>
+      </div>
+      <div id="col-list"></div>
+    </div>
+    <div class="fm-foot">Local for now - threads and collaborators are saved on this PC and sync online once krait accounts launch.</div>
+  </div>
+</div>
+
+<!-- login / create account (local-first: stored on this PC) -->
+<div id="auth-screen" class="hidden">
+  <div class="auth-box">
+    <img src="../../assets/icon.png" class="auth-logo" alt="">
+    <h1>Welcome to krait</h1>
+    <p class="auth-sub">Create a free account - just a username and password. It stays on your PC.</p>
+    <input id="auth-user" placeholder="Username" autocomplete="off">
+    <input id="auth-pass" type="password" placeholder="Password">
+    <input id="auth-pass2" type="password" placeholder="Confirm password">
+    <div id="auth-err" class="auth-err"></div>
+    <button id="auth-create" class="auth-btn">Create free account</button>
+    <div class="auth-foot">krait by Avepier &middot; free forever &middot; your keys, your models</div>
+  </div>
+</div>
+
+<!-- onboarding questionnaire -->
+<div id="onboard-screen" class="hidden">
+  <div class="ob-box">
+    <img src="../../assets/icon.png" class="auth-logo" alt="">
+    <h1 id="ob-title">What are you using krait for?</h1>
+    <p class="key-sub" id="ob-sub">This customizes krait for you.</p>
+    <div id="ob-opts"></div>
+    <div class="ob-nav">
+      <button id="ob-back" class="conn-btn">Back</button>
+      <span id="ob-step"></span>
+    </div>
+  </div>
 </div>
 
 <!-- projects modal -->
@@ -142,10 +197,7 @@
     <aside class="set-side">
       <div class="set-head">
         <img src="../../assets/icon.png" class="set-logo" alt="">
-        <div>
-          <div class="set-plan">Free plan</div>
-          <div class="set-plan-sub">your keys &middot; your models</div>
-        </div>
+        <div></div>
       </div>
       <button class="set-nav active" data-page="account">&#128100; Account</button>
       <button class="set-nav" data-page="appearance">&#127912; Appearance</button>
@@ -156,7 +208,7 @@
       <button class="set-nav" data-page="skills">&#127919; Skills</button>
       <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
       <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
-      <div class="set-side-foot">krait v1.8.0 &middot; by Avepier</div>
+      <div class="set-side-foot">krait v1.9.0 &middot; by Avepier</div>
     </aside>
     <div class="set-main">
       <div class="set-page" id="page-account">
@@ -255,6 +307,7 @@
           <button class="disc-tab active" data-ptab="yours">Yours</button>
           <button class="disc-tab" data-ptab="discover">Discover</button>
           <input id="plugin-search" class="disc-search" placeholder="Search plugins...">
+          <button id="plugin-create" class="conn-btn" title="Build your own plugin with the AI">+ Create more</button>
         </div>
         <div id="plugins-list"></div>
         <div id="discover-list" style="display:none"></div>
@@ -262,6 +315,11 @@
       <div class="set-page" id="page-skills" style="display:none">
         <h2>Skills</h2>
         <p class="key-sub">Ready-made skill packs. On = the AI gets expert instructions for that job.</p>
+        <div class="sk-actions">
+          <button id="skill-create" class="conn-btn">+ Create more</button>
+          <button id="skill-discover" class="conn-btn">&#128269; Discover</button>
+        </div>
+        <div id="skills-discover" style="display:none"></div>
         <div id="skills-list"></div>
       </div>
       <div class="set-page" id="page-connectors" style="display:none">

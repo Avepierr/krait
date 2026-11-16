@@ -85,13 +85,15 @@ async function init() {
   $('btn-min').onclick = () => window.krait && window.krait.minimize();
   $('btn-max').onclick = () => window.krait && window.krait.maximize();
   $('btn-close').onclick = () => window.krait && window.krait.close();
-  $('btn-settings').onclick = () => showSettings('account');
   // clicking the krait logo opens Settings (Account)
   $('brand-icon').onclick = () => showSettings('account');
   document.querySelector('.tb-name').onclick = () => showSettings('account');
   $('key-close').onclick = closeKeys;
-  $('btn-mcp').onclick = () => showSettings('mcp');
   $('btn-terminal').onclick = () => $('terminal').classList.toggle('hidden');
+  $('btn-search').onclick = () => {
+    openFind();
+    $('find-count').textContent = 'Ctrl+F';
+  };
 
   // new menu
   $('btn-new').onclick = e => { e.stopPropagation(); $('new-menu').classList.toggle('hidden'); };
@@ -112,11 +114,7 @@ async function init() {
     }
   });
   $('pm-settings').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('account'); };
-  $('pm-projects').onclick = () => { $('profile-menu').classList.add('hidden'); showProjects(); };
-  $('pm-plugins').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('plugins'); };
-  $('pm-skills').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('skills'); };
-  $('pm-connectors').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('connectors'); };
-  $('pm-mcp').onclick = () => { $('profile-menu').classList.add('hidden'); showSettings('mcp'); };
+  $('pm-forums').onclick = () => { $('profile-menu').classList.add('hidden'); showForums(); };
 
   // settings nav
   document.querySelectorAll('.set-nav').forEach(n => {
@@ -248,6 +246,8 @@ async function init() {
   $('find-close').onclick = closeFind;
   $('btn-mic').onclick = toggleVoice;
   $('token-info').onclick = toggleTokPop;
+  wireSkillButtons();
+  initAccountFlow();
 
   // keyboard shortcuts
   document.addEventListener('keydown', e => {
@@ -280,16 +280,21 @@ async function init() {
     }, 300);
   }
 
-  // terminal
+  // terminal: type krait / ollama / opencode and get a menu of options
+  $('term-in').addEventListener('input', () => {
+    const cmd = $('term-in').value.trim().toLowerCase();
+    renderTermMenu(TERM_COMMANDS[cmd] || null);
+  });
   $('term-in').addEventListener('keydown', async e => {
+    if (e.key === 'Escape') { renderTermMenu(null); return; }
     if (e.key !== 'Enter') return;
     const cmd = $('term-in').value.trim();
     if (!cmd) return;
     $('term-in').value = '';
-    termPrint('$ ' + cmd);
-    if (!window.krait) { termPrint('(only works inside the app)'); return; }
-    const r = await window.krait.runTerminal(cmd);
-    termPrint(r.stdout || r.stderr || '(no output)');
+    const menu = TERM_COMMANDS[cmd.toLowerCase()];
+    if (menu && !termChatOn) { menu.opts[0].run(); return; }
+    if (termChatOn) { termChatSend(cmd); return; }
+    termRunShell(cmd);
   });
 
   // keys + model list
@@ -1522,7 +1527,10 @@ function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function activeSkillHints() {
   const saved = JSON.parse(localStorage.getItem('krait-skills') || '{}');
   const own = SKILLS.filter(s => saved[s.id] !== false).map(s => s.hint);
-  return own.concat(communityHintText());
+  const custom = listCustomSkills().filter(c => saved['custom-' + c.id] !== false).map(c => c.hint);
+  const packs = Object.keys(saved).filter(k => k.startsWith('pack-') && saved[k]).map(k =>
+    'Skill: ' + k.slice(5) + ' pack is active.');
+  return own.concat(custom, packs, communityHintText());
 }
 
 /* ═══════════ Find in chat (Ctrl+F) ═══════════ */
@@ -1611,8 +1619,10 @@ function toggleVoice() {
     };
     recog.onend = () => { recogOn = false; $('btn-mic').classList.remove('on'); };
     recog.onerror = ev => {
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') toast('Microphone blocked - allow mic access (and note voice may need an internet connection)');
-      else if (ev.error === 'network') toast('Voice input needs an internet connection');
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') toast('Microphone blocked - allow mic access for krait in Windows settings');
+      else if (ev.error === 'network') toast("The voice service didn't respond - that's a krait limitation, not your internet. Your connection is fine.");
+      else if (ev.error === 'no-speech') toast("Heard nothing - try again a bit closer to the mic");
+      else toast('Voice input hit a snag (' + ev.error + ') - typing still works');
     };
     recog.start();
     recogOn = true;
@@ -2278,11 +2288,441 @@ function renderDiscover(q) {
   }
 }
 
+/* ═══════════ Account (local-first) ═══════════ */
+function getAccount() {
+  try { return JSON.parse(localStorage.getItem('krait-account') || 'null'); } catch { return null; }
+}
+async function hashPass(pass) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('krait:' + pass));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return 'plain:' + pass; }
+}
+function accountRegistry() {
+  try { return JSON.parse(localStorage.getItem('krait-accounts') || '{}'); } catch { return {}; }
+}
+function initAccountFlow() {
+  const acc = getAccount();
+  if (acc && acc.onboarded) return; // signed in + onboarded
+  if (acc) { startOnboarding(acc); return; }
+  // show the login / create-account screen
+  $('auth-screen').classList.remove('hidden');
+  $('auth-create').onclick = async () => {
+    const u = $('auth-user').value.trim();
+    const p1 = $('auth-pass').value;
+    const p2 = $('auth-pass2').value;
+    const err = $('auth-err');
+    if (!/^[\w .-]{3,20}$/.test(u)) { err.textContent = 'Username: 3-20 letters, numbers or dots.'; return; }
+    if (p1.length < 4) { err.textContent = 'Password: at least 4 characters.'; return; }
+    if (p1 !== p2) { err.textContent = "Passwords don't match."; return; }
+    const reg = accountRegistry();
+    const h = await hashPass(p1);
+    if (reg[u] && reg[u] !== h) { err.textContent = 'That account exists - wrong password.'; return; }
+    reg[u] = h;
+    localStorage.setItem('krait-accounts', JSON.stringify(reg));
+    localStorage.setItem('krait-account', JSON.stringify({ user: u, hash: h, onboarded: false, created: Date.now(), answers: {} }));
+    $('auth-screen').classList.add('hidden');
+    err.textContent = '';
+    toast('Signed in as ' + u);
+    startOnboarding(getAccount());
+  };
+}
+
+/* ═══════════ Onboarding questionnaire ═══════════ */
+const OB_QS = [
+  { key: 'purpose', title: 'What are you using krait for?', sub: 'This tunes krait for your kind of work.', opts: [
+    ['game', 'Building games'], ['web', 'Web development'], ['app', 'App development'],
+    ['data', 'Data & AI'], ['school', 'School & learning'], ['explore', 'Just exploring'],
+  ]},
+  { key: 'team', title: 'How many people are you working with?', sub: 'We will suggest the right collaboration setup.', opts: [
+    ['solo', 'Just me'], ['few', 'A few people (2-5)'], ['team', 'A full team'],
+  ]},
+  { key: 'level', title: 'How much coding experience do you have?', sub: 'krait adapts how it explains things.', opts: [
+    ['new', 'New to coding'], ['some', 'Some experience'], ['pro', 'Pro developer'],
+  ]},
+  { key: 'style', title: 'How do you want krait to answer?', sub: 'You can change this anytime in Capabilities.', opts: [
+    ['quick', 'Quick answers'], ['deep', 'Deep, thorough work'], ['both', 'Both - it depends'],
+  ]},
+];
+let obStep = 0;
+function startOnboarding(acc) {
+  obStep = 0;
+  $('onboard-screen').classList.remove('hidden');
+  renderObStep(acc);
+  $('ob-back').onclick = () => {
+    if (obStep > 0) { obStep--; renderObStep(getAccount()); }
+  };
+}
+function renderObStep(acc) {
+  const q = OB_QS[obStep];
+  $('ob-title').textContent = q.title;
+  $('ob-sub').textContent = q.sub;
+  $('ob-step').textContent = (obStep + 1) + ' / ' + OB_QS.length;
+  $('ob-back').style.visibility = obStep > 0 ? 'visible' : 'hidden';
+  const box = $('ob-opts');
+  box.innerHTML = '';
+  for (const [val, label] of q.opts) {
+    const b = document.createElement('button');
+    b.className = 'ob-opt' + (acc.answers[q.key] === val ? ' active' : '');
+    b.textContent = label;
+    b.onclick = async () => {
+      acc.answers[q.key] = val;
+      localStorage.setItem('krait-account', JSON.stringify(acc));
+      if (obStep < OB_QS.length - 1) { obStep++; renderObStep(acc); }
+      else { applyOnboarding(acc); }
+    };
+    box.appendChild(b);
+  }
+}
+function applyOnboarding(acc) {
+  acc.onboarded = true;
+  localStorage.setItem('krait-account', JSON.stringify(acc));
+  $('onboard-screen').classList.add('hidden');
+  const a = acc.answers;
+  // skills by purpose
+  const sk = JSON.parse(localStorage.getItem('krait-skills') || '{}');
+  if (a.purpose === 'game' || a.purpose === 'app') sk.games = true;
+  if (a.purpose === 'web' || a.purpose === 'data') sk.web = true;
+  if (a.purpose === 'school') sk.excel = true;
+  localStorage.setItem('krait-skills', JSON.stringify(sk));
+  // answer style -> default effort
+  const caps = JSON.parse(localStorage.getItem('krait-caps') || '{}');
+  caps.mode = a.level === 'pro' ? 'bypass' : (a.level === 'new' ? 'normal' : 'auto');
+  caps.effort = a.style === 'quick' ? 'low' : (a.style === 'deep' ? 'high' : 'medium');
+  localStorage.setItem('krait-caps', JSON.stringify(caps));
+  if ($('cap-mode')) { $('cap-mode').value = caps.mode; $('cap-effort').value = caps.effort; }
+  toast('krait is set up for you' + (a.team !== 'solo' ? ' - Collaboration lives in Forums' : ''));
+}
+
+/* ═══════════ Forums (local-first) ═══════════ */
+function loadForums() {
+  try { return JSON.parse(localStorage.getItem('krait-forums') || '[]'); } catch { return []; }
+}
+function showForums() {
+  $('forums-screen').classList.add('show');
+  $('forums-close').onclick = () => $('forums-screen').classList.remove('show');
+  document.querySelectorAll('.fm-tab').forEach(t => {
+    t.onclick = () => {
+      document.querySelectorAll('.fm-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      $('fm-threads').style.display = t.dataset.ftab === 'threads' ? '' : 'none';
+      $('fm-collab').style.display = t.dataset.ftab === 'collab' ? '' : 'none';
+      if (t.dataset.ftab === 'collab') renderCollab();
+    };
+  });
+  $('fm-post').onclick = postThread;
+  renderForums();
+}
+function postThread() {
+  const title = $('fm-title').value.trim();
+  const body = $('fm-body').value.trim();
+  if (!title || !body) { toast('Add a title and a message'); return; }
+  const acc = getAccount();
+  const threads = loadForums();
+  threads.unshift({ id: 'th-' + Date.now(), author: (acc && acc.user) || 'guest', title, body, ts: Date.now(), replies: [] });
+  localStorage.setItem('krait-forums', JSON.stringify(threads.slice(0, 100)));
+  $('fm-title').value = '';
+  $('fm-body').value = '';
+  renderForums();
+}
+function renderForums() {
+  const box = $('fm-list');
+  if (!box) return;
+  let threads = loadForums();
+  if (!threads.length) {
+    threads = [{ id: 'th-welcome', author: 'Avepier', title: 'Welcome to the krait forums', body: 'Ask anything, share what you built, or find people to collaborate with. Threads are saved locally for now and go online when krait accounts launch.', ts: Date.now(), replies: [] }];
+    localStorage.setItem('krait-forums', JSON.stringify(threads));
+  }
+  box.innerHTML = '';
+  for (const th of threads) {
+    const el = document.createElement('div');
+    el.className = 'fm-thread';
+    const head = document.createElement('div');
+    head.className = 'fm-t-head';
+    head.innerHTML = '<b>' + escHtml(th.title) + '</b><span class="fm-t-by">by ' + escHtml(th.author) + '</span>';
+    const body = document.createElement('div');
+    body.className = 'fm-t-body';
+    body.textContent = th.body;
+    const rep = document.createElement('div');
+    rep.className = 'fm-t-replies';
+    for (const r of th.replies || []) {
+      const rl = document.createElement('div');
+      rl.className = 'fm-reply';
+      rl.innerHTML = '<span class="fm-t-by">' + escHtml(r.author) + '</span> ' + escHtml(r.text);
+      rep.appendChild(rl);
+    }
+    const rrow = document.createElement('div');
+    rrow.className = 'fm-rrow';
+    const rin = document.createElement('input');
+    rin.placeholder = 'Reply...';
+    const rbtn = document.createElement('button');
+    rbtn.className = 'conn-btn';
+    rbtn.textContent = 'Reply';
+    rbtn.onclick = () => {
+      const t = rin.value.trim();
+      if (!t) return;
+      const acc = getAccount();
+      const all = loadForums();
+      const me = all.find(x => x.id === th.id);
+      if (me) {
+        me.replies = me.replies || [];
+        me.replies.push({ author: (acc && acc.user) || 'guest', text: t, ts: Date.now() });
+        localStorage.setItem('krait-forums', JSON.stringify(all));
+        renderForums();
+      }
+    };
+    rrow.appendChild(rin); rrow.appendChild(rbtn);
+    el.appendChild(head); el.appendChild(body); el.appendChild(rep); el.appendChild(rrow);
+    box.appendChild(el);
+  }
+}
+
+/* ═══════════ Collaboration (local-first mock) ═══════════ */
+function loadCollab() {
+  try { return JSON.parse(localStorage.getItem('krait-collab') || '[]'); } catch { return []; }
+}
+function renderCollab() {
+  const box = $('col-list');
+  if (!box) return;
+  const list = loadCollab();
+  box.innerHTML = '';
+  if (!list.length) box.innerHTML = '<div class="pvf-empty">No collaborators yet - add someone above.</div>';
+  for (const c of list) {
+    const row = document.createElement('div');
+    row.className = 'col-row';
+    const who = document.createElement('div');
+    who.className = 'col-who';
+    who.innerHTML = '<b>' + escHtml(c.user) + '</b> <span class="col-perm ' + c.perm + '">' + (c.perm === 'edit' ? 'can edit' : 'can view') + '</span>';
+    const view = document.createElement('button');
+    view.className = 'conn-btn';
+    view.textContent = 'View their chat';
+    view.onclick = () => showCollabChat(c);
+    const perm = document.createElement('button');
+    perm.className = 'conn-btn';
+    perm.textContent = c.perm === 'edit' ? 'Make view-only' : 'Allow edit';
+    perm.onclick = () => {
+      const all = loadCollab();
+      const me = all.find(x => x.id === c.id);
+      if (me) { me.perm = me.perm === 'edit' ? 'view' : 'edit'; localStorage.setItem('krait-collab', JSON.stringify(all)); renderCollab(); }
+    };
+    const del = document.createElement('button');
+    del.className = 'conn-btn';
+    del.textContent = 'Remove';
+    del.onclick = () => {
+      localStorage.setItem('krait-collab', JSON.stringify(loadCollab().filter(x => x.id !== c.id)));
+      renderCollab();
+    };
+    row.appendChild(who); row.appendChild(view); row.appendChild(perm); row.appendChild(del);
+    box.appendChild(row);
+  }
+}
+function showCollabChat(c) {
+  // local mock: if that username has an account on this PC, show their last chat titles read-only
+  const reg = accountRegistry();
+  const box = $('col-list');
+  const panel = document.createElement('div');
+  panel.className = 'col-view';
+  const close = document.createElement('button');
+  close.className = 'conn-btn';
+  close.textContent = 'Close preview';
+  close.onclick = () => panel.remove();
+  if (reg[c.user]) {
+    const last = (() => { try { return JSON.parse(localStorage.getItem('krait-last-chat') || 'null'); } catch { return null; } })();
+    const lines = (last && last.msgs || []).map(m => (m.role === 'user' ? 'you: ' : 'krait: ') + String(m.content || '').slice(0, 120));
+    panel.innerHTML = '<b>' + escHtml(c.user) + "'s chat (read-only" + (c.perm === 'edit' ? ', you may edit after they accept' : '') + ')</b>' +
+      (lines.length ? '<div class="col-msgs">' + lines.map(l => '<div>' + escHtml(l) + '</div>').join('') + '</div>'
+        : '<div class="pvf-empty">No shared chat history on this PC yet.</div>');
+  } else {
+    panel.innerHTML = '<b>' + escHtml(c.user) + '</b> - invited. They appear here once they join krait on a synced device.';
+  }
+  panel.appendChild(close);
+  box.prepend(panel);
+}
+function wireCollab() {
+  const add = $('col-add');
+  if (!add) return;
+  add.onclick = () => {
+    const u = $('col-user').value.trim();
+    if (!/^[\w .-]{3,20}$/.test(u)) { toast('Enter a username (3-20 characters)'); return; }
+    const perm = $('col-perm').value;
+    const list = loadCollab();
+    if (list.some(x => x.user === u)) { toast('Already added'); return; }
+    list.unshift({ id: 'co-' + Date.now(), user: u, perm, ts: Date.now() });
+    localStorage.setItem('krait-collab', JSON.stringify(list.slice(0, 50)));
+    $('col-user').value = '';
+    renderCollab();
+    toast(u + ' added - ' + (perm === 'edit' ? 'can edit' : 'can view'));
+  };
+}
+
+/* ═══════════ Terminal command menu ═══════════ */
+let termChatOn = false;
+let termConvo = [];
+const TERM_COMMANDS = {
+  krait: {
+    label: 'krait', opts: [
+      { label: 'Chat in terminal (Claude-style)', run: () => startTermChat() },
+      { label: 'krait info (version, features)', run: () => { termPrint('$ krait'); termPrint('krait v1.9.0 by Avepier - free AI coding agent. Features: any model provider, real file tools, projects, checkpoints, forums, collaboration.'); } },
+      { label: 'Run as shell command', run: () => termRunShell('krait') },
+    ],
+  },
+  ollama: {
+    label: 'ollama', opts: [
+      { label: 'Chat in terminal (Ollama-style)', run: () => startTermChat() },
+      { label: 'List local models (ollama list)', run: () => termRunShell('ollama list') },
+      { label: 'Run as shell command', run: () => termRunShell('ollama') },
+    ],
+  },
+  opencode: {
+    label: 'opencode', opts: [
+      { label: 'Chat in terminal (opencode-style)', run: () => startTermChat() },
+      { label: 'What is opencode?', run: () => { termPrint('$ opencode'); termPrint('opencode is the terminal AI coding agent krait is inspired by. krait is its desktop cousin - same energy, window and mouse included.'); } },
+      { label: 'Run as shell command', run: () => termRunShell('opencode') },
+    ],
+  },
+};
+function termRunShell(cmd) {
+  renderTermMenu(null);
+  termPrint('$ ' + cmd);
+  if (!window.krait) { termPrint('(only works inside the app)'); return; }
+  return window.krait.runTerminal(cmd).then(r => termPrint(r.stdout || r.stderr || '(no output)'));
+}
+function renderTermMenu(menu) {
+  const box = $('term-menu');
+  if (!box) return;
+  if (!menu || termChatOn) { box.classList.add('hidden'); return; }
+  box.innerHTML = '<div class="tm-title">' + menu.label + ' - pick an option:</div>';
+  menu.opts.forEach((o, i) => {
+    const b = document.createElement('button');
+    b.className = 'tm-opt';
+    b.innerHTML = '<span class="tm-num">' + (i + 1) + '</span> ' + escHtml(o.label);
+    b.onclick = () => { $('term-in').value = ''; o.run(); };
+    box.appendChild(b);
+  });
+  box.classList.remove('hidden');
+}
+function startTermChat() {
+  termChatOn = true;
+  termConvo = [];
+  renderTermMenu(null);
+  $('term-in').placeholder = 'you > (type "exit" to leave chat)';
+  termPrint('--- krait terminal chat - type a message, "exit" to leave ---');
+}
+async function termChatSend(msg) {
+  if (msg.toLowerCase() === 'exit' || msg.toLowerCase() === 'quit') {
+    termChatOn = false;
+    termConvo = [];
+    $('term-in').placeholder = '$ command';
+    termPrint('--- chat ended ---');
+    return;
+  }
+  termPrint('you > ' + msg);
+  termConvo.push({ role: 'user', content: msg });
+  if (!window.krait || !K.model) { termPrint('krait: (no model selected - pick one in the app first)'); return; }
+  termPrint('krait > ...');
+  try {
+    const res = await window.krait.chat(K.model, termConvo, { effort: 'low' });
+    if (res.error) { termPrint('krait: (' + res.error + ')'); return; }
+    termConvo.push({ role: 'assistant', content: res.text || '' });
+    const o = $('term-out');
+    const lines = o.textContent.split('\n');
+    lines[lines.length - 2] = 'krait > ' + String(res.text || '').replace(/\s+$/, '');
+    o.textContent = lines.join('\n');
+    o.scrollTop = o.scrollHeight;
+  } catch (e) {
+    termPrint('krait: (failed - ' + e.message + ')');
+  }
+}
+function miniDialog(title, f1, f2, onOk) {
+  const d = document.createElement('div');
+  d.className = 'mini-dlg';
+  d.innerHTML = '<div class="md-title">' + escHtml(title) + '</div>';
+  const i1 = document.createElement('input');
+  i1.placeholder = f1;
+  d.appendChild(i1);
+  let i2 = null;
+  if (f2) { i2 = document.createElement('input'); i2.placeholder = f2; d.appendChild(i2); }
+  const row = document.createElement('div');
+  row.className = 'md-row';
+  const ok = document.createElement('button');
+  ok.className = 'conn-btn on';
+  ok.textContent = 'Save';
+  const cancel = document.createElement('button');
+  cancel.className = 'conn-btn';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => d.remove();
+  ok.onclick = () => { if (!i1.value.trim() || (i2 && !i2.value.trim())) { toast('Fill in both fields'); return; } d.remove(); onOk(i1.value.trim(), i2 ? i2.value.trim() : ''); };
+  row.appendChild(ok); row.appendChild(cancel);
+  d.appendChild(row);
+  document.body.appendChild(d);
+}
+function wireSkillButtons() {
+  const sc = $('skill-create');
+  if (sc) sc.onclick = () => {
+    miniDialog('Create a skill', 'Skill name (e.g. "Python expert")', 'What should the AI do when it applies?', (name, hint) => {
+      const list = listCustomSkills();
+      list.unshift({ id: 'c' + Date.now(), name: name.slice(0, 40), desc: 'Custom skill', hint: hint.slice(0, 400) });
+      localStorage.setItem('krait-skills-custom', JSON.stringify(list.slice(0, 20)));
+      showSkills();
+      toast('Custom skill added');
+    });
+  };
+  const sd = $('skill-discover');
+  if (sd) sd.onclick = () => {
+    const box = $('skills-discover');
+    if (!box) return;
+    if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+    const packs = [
+      { name: 'SQL wizard', hint: 'When working with databases, write correct, indexed SQL and explain the query plan simply.' },
+      { name: 'Regex master', hint: 'When regex is needed, build a precise pattern, test it mentally against examples, and explain each part.' },
+      { name: 'Data viz', hint: 'When asked for charts, build a self-contained HTML page with inline canvas/SVG rendering.' },
+      { name: 'Terminal pro', hint: 'Prefer concise cross-platform shell commands and always explain dangerous flags.' },
+    ];
+    box.innerHTML = '';
+    const saved = JSON.parse(localStorage.getItem('krait-skills') || '{}');
+    for (const pk of packs) {
+      const row = document.createElement('div');
+      row.className = 'plug-item';
+      row.innerHTML = '<div><div class="plug-name">' + escHtml(pk.name) + '</div><div class="plug-desc">Community skill pack</div></div>';
+      const t = document.createElement('div');
+      t.className = 'plug-toggle' + (saved['pack-' + pk.name] ? ' on' : '');
+      t.onclick = () => {
+        t.classList.toggle('on');
+        const cur = JSON.parse(localStorage.getItem('krait-skills') || '{}');
+        cur['pack-' + pk.name] = t.classList.contains('on');
+        localStorage.setItem('krait-skills', JSON.stringify(cur));
+      };
+      row.appendChild(t);
+      box.appendChild(row);
+    }
+    box.style.display = '';
+  };
+  const pc = $('plugin-create');
+  if (pc) pc.onclick = () => {
+    miniDialog('Create a plugin', 'Plugin name (e.g. "Camera")', null, name => {
+      const list = (() => { try { return JSON.parse(localStorage.getItem('krait-plugins-custom') || '[]'); } catch { return []; } })();
+      list.unshift({ id: 'c' + Date.now(), name: name.slice(0, 40), desc: 'Custom plugin - wired through MCP' });
+      localStorage.setItem('krait-plugins-custom', JSON.stringify(list.slice(0, 20)));
+      toast('Plugin saved - connect it under MCP servers');
+    });
+  };
+  wireCollab();
+}
+function listCustomSkills() {
+  try { return JSON.parse(localStorage.getItem('krait-skills-custom') || '[]'); } catch { return []; }
+}
+
 function showSkills() {
   const saved = JSON.parse(localStorage.getItem('krait-skills') || '{}');
   const box = $('skills-list');
   box.innerHTML = '';
-  for (const s of SKILLS) {
+  const PACKS_UI = [
+    { id: 'pack-SQL wizard', name: 'SQL wizard', desc: 'Community skill pack' },
+    { id: 'pack-Regex master', name: 'Regex master', desc: 'Community skill pack' },
+    { id: 'pack-Data viz', name: 'Data viz', desc: 'Community skill pack' },
+    { id: 'pack-Terminal pro', name: 'Terminal pro', desc: 'Community skill pack' },
+  ];
+  for (const s of SKILLS.concat(listCustomSkills().map(c => ({ id: 'custom-' + c.id, name: c.name, desc: c.desc })), PACKS_UI)) {
     const row = document.createElement('div');
     row.className = 'plug-item';
     row.innerHTML = '<div><div class="plug-name">' + s.name + '</div><div class="plug-desc">' + s.desc + '</div></div>';
