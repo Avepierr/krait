@@ -280,19 +280,55 @@ async function init() {
     }, 300);
   }
 
-  // terminal: type krait / ollama / opencode and get a menu of options
+  // terminal: type krait / ollama / opencode + Enter -> ollama-style launcher menu
   $('term-in').addEventListener('input', () => {
-    renderTermMenu(matchTermCmd($('term-in').value.trim()));
+    if (termLaunch) closeTermLaunch(); // typing backs out of the menu
   });
   $('term-in').addEventListener('keydown', async e => {
-    if (e.key === 'Escape') { renderTermMenu(null); return; }
+    if (termLaunch) {
+      const n = termLaunch.items.length;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        termLaunch.idx = e.key === 'ArrowDown' ? (termLaunch.idx + 1) % n : (termLaunch.idx - 1 + n) % n;
+        renderTermLaunch();
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        const i = Number(e.key) - 1;
+        if (i < n) { const items = termLaunch.items; closeTermLaunch(); items[i].run(); }
+        return;
+      }
+      if (e.key === 'Escape') { e.preventDefault(); closeTermLaunch(); termPrint('(menu closed)'); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const items = termLaunch.items;
+        const it = items[termLaunch.idx];
+        closeTermLaunch();
+        if (it) it.run();
+        return;
+      }
+      return; // while the menu is open the input only navigates
+    }
+    if (e.key === 'Escape') return;
     if (e.key !== 'Enter') return;
     const cmd = $('term-in').value.trim();
     if (!cmd) return;
     $('term-in').value = '';
-    const menu = matchTermCmd(cmd);
-    if (menu && !termChatOn) { menu.opts[0].run(); return; }
+    if (termPickOn) {
+      const i = Number(cmd) - 1;
+      termPickOn = false;
+      if (K.termPickIds && i >= 0 && i < K.termPickIds.length) {
+        const full = K.termPickIds[i];
+        const m = (K.modelList || []).find(x => x.ns + '/' + x.id === full);
+        pickModel(full, m && m.vision, true);
+        termPrint('model switched to ' + full);
+      } else termPrint('(no model picked)');
+      return;
+    }
     if (termChatOn) { termChatSend(cmd); return; }
+    const menu = matchTermCmd(cmd);
+    if (menu) { openTermLaunch(cmd, menu); return; }
     termRunShell(cmd);
   });
 
@@ -326,6 +362,7 @@ async function init() {
     window.krait.onAskPermission(onAskPermission);
     window.krait.onTool(info => {
       turnToolUsed = true;
+      if (termAgentOn) termPrint('  [' + info.name + ']' + (info.summary ? ' ' + info.summary : ''));
       if (currentAssistant) {
         const bubble = currentAssistant.querySelector('.bubble');
         // group consecutive tool events into one collapsible "Used N Edit, Shell" block
@@ -2560,69 +2597,150 @@ function wireCollab() {
   };
 }
 
-/* ═══════════ Terminal command menu ═══════════ */
+/* ═══════════ Terminal launcher (ollama-style) + chat / agent ═══════════ */
 let termChatOn = false;
+let termAgentOn = false;
+let termPickOn = false;
 let termConvo = [];
+let termLaunch = null; // { cmd, more, idx, items }
+const TERM_VERSION = '1.9.2';
+function shortModelId(full) { return String(full || '').split('/').pop() || 'none'; }
+function ollamaModel() {
+  const list = (K.modelList || []).filter(m => m.ns === 'ollama');
+  return list.length ? 'ollama/' + list[0].id : null;
+}
 const TERM_COMMANDS = {
   krait: {
-    label: 'krait', opts: [
-      { label: 'Chat in terminal (Claude-style)', run: () => startTermChat() },
-      { label: 'krait info (version, features)', run: () => { termPrint('$ krait'); termPrint('krait v1.9.0 by Avepier - free AI coding agent. Features: any model provider, real file tools, projects, checkpoints, forums, collaboration.'); } },
-      { label: 'Run as shell command', run: () => termRunShell('krait') },
-    ],
+    label: 'krait',
+    ver: 'krait ' + TERM_VERSION,
+    items: () => ([
+      { title: 'Chat with a model', sub: '(' + shortModelId(K.model) + ') Start an interactive chat with the selected model', run: () => startTermChat() },
+      { title: 'Launch krait agent', sub: "krait's coding agent - it reads, writes and edits files on your PC", run: () => startTermAgent() },
+      { title: 'Models', sub: 'List the models you have and pick one by number', run: () => termModels() },
+      { title: 'krait info', sub: 'Version, features and credits', run: () => { termPrint('krait ' + TERM_VERSION + ' by Avepier - free AI coding agent.'); termPrint('Features: any model provider, real file tools, projects, checkpoints, forums, collaboration.'); } },
+      { title: 'More...', sub: 'Additional integrations', run: () => { termLaunch = { cmd: termLaunch.cmd, more: true, idx: 0, items: termMoreItems() }; renderTermLaunch(); } },
+    ]),
   },
   ollama: {
-    label: 'ollama', opts: [
-      { label: 'Chat in terminal (Ollama-style)', run: () => startTermChat() },
-      { label: 'List local models (ollama list)', run: () => termRunShell('ollama list') },
-      { label: 'Run as shell command', run: () => termRunShell('ollama') },
-    ],
+    label: 'ollama',
+    ver: 'Ollama 0.40.16 (krait integration)',
+    items: () => {
+      const om = ollamaModel();
+      return [
+        om
+          ? { title: 'Chat with a model', sub: '(' + om.split('/')[1] + ') Start an interactive chat with a local model', run: () => { K.model = om; toast('Model: ' + om); startTermChat(); } }
+          : { title: 'Chat with a model', sub: '(none installed - run ollama pull first)', run: () => termPrint('No local Ollama models found. Install one with: ollama pull llama3.2') },
+        { title: 'ollama list', sub: 'Show installed local models', run: () => termRunShell('ollama list') },
+        { title: 'ollama status', sub: 'Check if the Ollama app is running', run: async () => {
+            if (!window.krait) return;
+            const st = await window.krait.ollamaStatus();
+            termPrint(st && st.running ? 'Ollama is running.' : 'Ollama is not running - start the Ollama app first.');
+          } },
+        { title: 'More...', sub: 'Additional integrations', run: () => { termLaunch = { cmd: termLaunch.cmd, more: true, idx: 0, items: termMoreItems() }; renderTermLaunch(); } },
+      ];
+    },
   },
   opencode: {
-    label: 'opencode', opts: [
-      { label: 'Chat in terminal (opencode-style)', run: () => startTermChat() },
-      { label: 'What is opencode?', run: () => { termPrint('$ opencode'); termPrint('opencode is the terminal AI coding agent krait is inspired by. krait is its desktop cousin - same energy, window and mouse included.'); } },
-      { label: 'Run as shell command', run: () => termRunShell('opencode') },
-    ],
+    label: 'opencode',
+    ver: 'opencode integration (krait ' + TERM_VERSION + ')',
+    items: () => ([
+      { title: 'Chat in terminal', sub: 'opencode-style chat, right here', run: () => startTermChat() },
+      { title: 'What is opencode?', sub: 'The terminal agent krait is inspired by', run: () => { termPrint('opencode is the terminal AI coding agent krait is inspired by.'); termPrint('krait is its desktop cousin - same energy, window and mouse included.'); } },
+      { title: 'More...', sub: 'Additional integrations', run: () => { termLaunch = { cmd: termLaunch.cmd, more: true, idx: 0, items: termMoreItems() }; renderTermLaunch(); } },
+    ]),
   },
 };
+function termMoreItems() {
+  return [
+    { title: 'Open Forums', sub: 'Community threads and collaboration', run: () => { closeTermLaunch(); showForums(); } },
+    { title: 'Open Projects', sub: 'Folders the AI works in', run: () => { closeTermLaunch(); showProjects(); } },
+    { title: 'Toggle theme', sub: 'Dark / light', run: () => { const l = document.body.classList.toggle('light'); localStorage.setItem('krait-theme', l ? 'light' : 'dark'); } },
+    { title: 'Back', sub: 'Return to the main menu', run: () => { termLaunch = { cmd: termLaunch.cmd, more: false, idx: 0, items: termLaunch.cmd.items() }; renderTermLaunch(); } },
+  ];
+}
 function matchTermCmd(cmd) {
   const lc = String(cmd || '').trim().toLowerCase();
   const key = Object.keys(TERM_COMMANDS).find(k => lc === k || lc.startsWith(k + ' '));
   return key ? TERM_COMMANDS[key] : null;
 }
 function termRunShell(cmd) {
-  renderTermMenu(null);
+  closeTermLaunch();
   termPrint('$ ' + cmd);
   if (!window.krait) { termPrint('(only works inside the app)'); return; }
   return window.krait.runTerminal(cmd).then(r => termPrint(r.stdout || r.stderr || '(no output)'));
 }
-function renderTermMenu(menu) {
-  const box = $('term-menu');
-  if (!box) return;
-  if (!menu || termChatOn) { box.classList.add('hidden'); return; }
-  box.innerHTML = '<div class="tm-title">' + menu.label + ' - pick an option:</div>';
-  menu.opts.forEach((o, i) => {
-    const b = document.createElement('button');
-    b.className = 'tm-opt';
-    b.innerHTML = '<span class="tm-num">' + (i + 1) + '</span> ' + escHtml(o.label);
-    b.onclick = () => { $('term-in').value = ''; o.run(); };
-    box.appendChild(b);
+function openTermLaunch(typed, cmd) {
+  termPrint('$ ' + typed);
+  termPrint(cmd.ver);
+  termLaunch = { cmd, more: false, idx: 0, items: cmd.items() };
+  renderTermLaunch();
+}
+function closeTermLaunch() {
+  termLaunch = null;
+  const box = $('term-launch');
+  if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+}
+function renderTermLaunch() {
+  const box = $('term-launch');
+  if (!box || !termLaunch) return;
+  box.innerHTML = '';
+  termLaunch.items.forEach((it, i) => {
+    const row = document.createElement('div');
+    row.className = 'tl-item' + (i === termLaunch.idx ? ' sel' : '');
+    row.innerHTML = '<div class="tl-title">' + escHtml(it.title) + '</div><div class="tl-sub">' + escHtml(it.sub) + '</div>';
+    row.onclick = () => { const items = termLaunch.items; const k = i; closeTermLaunch(); items[k].run(); };
+    box.appendChild(row);
   });
+  const foot = document.createElement('div');
+  foot.className = 'tl-foot';
+  foot.textContent = '\u2191/\u2193 navigate \u2022 enter launch \u2022 1-9 quick pick \u2022 esc quit';
+  box.appendChild(foot);
   box.classList.remove('hidden');
+  const sel = box.querySelector('.tl-item.sel');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function termModels() {
+  const list = K.modelList || [];
+  if (!list.length) { termPrint('No models found - add a key in Settings.'); return; }
+  termPrint('Your models - type a number and press Enter to switch:');
+  K.termPickIds = [];
+  let n = 0;
+  const byNs = {};
+  for (const m of list) { (byNs[m.ns] = byNs[m.ns] || []).push(m); }
+  for (const ns of Object.keys(byNs)) {
+    for (const m of byNs[ns].slice(0, 6)) {
+      n++;
+      K.termPickIds.push(ns + '/' + m.id);
+      termPrint('  ' + n + '. ' + ns + '/' + m.id + (m.vision ? ' (vision)' : ''));
+      if (n >= 15) break;
+    }
+    if (n >= 15) break;
+  }
+  termPickOn = true;
 }
 function startTermChat() {
   termChatOn = true;
+  termAgentOn = false;
   termConvo = [];
-  renderTermMenu(null);
+  closeTermLaunch();
   $('term-in').placeholder = 'you > (type "exit" to leave chat)';
   termPrint('\u2500\u2500\u2500\u2500\u2500\u2500 krait terminal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
   termPrint('chat mode on. Just type. "help", "clear", "exit" also work.');
+}
+function startTermAgent() {
+  termAgentOn = true;
+  termChatOn = false;
+  termConvo = [];
+  closeTermLaunch();
+  $('term-in').placeholder = 'task > (type "exit" to leave)';
+  termPrint('\u2500\u2500\u2500\u2500\u2500\u2500 krait agent \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+  termPrint('agent mode: describe a task and I will read, write and edit files in your active project to do it. "exit" to leave.');
 }
 async function termChatSend(msg) {
   const low = msg.toLowerCase();
   if (low === 'exit' || low === 'quit') {
     termChatOn = false;
+    termAgentOn = false;
     termConvo = [];
     $('term-in').placeholder = '$ command';
     termPrint('--- chat ended ---');
@@ -2634,15 +2752,17 @@ async function termChatSend(msg) {
     return;
   }
   if (low === 'help') {
-    termPrint('commands: help - this list, clear - wipe the screen, exit - leave chat. Anything else is sent to the model.');
+    termPrint('commands: help - this list, clear - wipe the screen, exit - leave. In agent mode I use real file tools (permission popups open in the app).');
     return;
   }
-  termPrint('you > ' + msg);
+  termPrint((termAgentOn ? 'task > ' : 'you > ') + msg);
   termConvo.push({ role: 'user', content: msg });
-  if (!window.krait || !K.model) { termPrint('krait: (no model selected - pick one in the app first)'); return; }
+  if (!window.krait || !K.model) { termPrint('krait: (no model selected - pick one with the Models option)'); return; }
   termPrint('krait > ...');
   try {
-    const res = await window.krait.chat(K.model, termConvo, { effort: 'low' });
+    const res = await window.krait.chat(K.model, termConvo, termAgentOn
+      ? { effort: 'medium', enabledTools: enabledTools(), skills: activeSkillHints() }
+      : { effort: 'low' });
     if (res.error) { termPrint('krait: (' + res.error + ')'); return; }
     termConvo.push({ role: 'assistant', content: res.text || '' });
     const o = $('term-out');
