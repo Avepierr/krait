@@ -2338,7 +2338,17 @@ async function hashPass(pass) {
   try {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('krait:' + pass));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-  } catch { return 'plain:' + pass; }
+  } catch {
+    // never store plaintext: fall back to a one-way JS hash (djb2, salted)
+    let h1 = 5381, h2 = 52711;
+    const str = 'krait:' + pass;
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      h1 = ((h1 * 33) ^ c) >>> 0;
+      h2 = ((h2 * 31) ^ c) >>> 0;
+    }
+    return 'djb2:' + h1.toString(16) + h2.toString(16);
+  }
 }
 function accountRegistry() {
   try { return JSON.parse(localStorage.getItem('krait-accounts') || '{}'); } catch { return {}; }
