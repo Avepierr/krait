@@ -2384,7 +2384,7 @@ function initAccountFlow() {
 
 /* ═══════════ Onboarding questionnaire ═══════════ */
 const OB_QS = [
-  { key: 'purpose', title: 'What are you using krait for?', sub: 'This tunes krait for your kind of work.', opts: [
+  { key: 'purpose', title: 'What are you using krait for?', sub: 'Pick as many as you like - this tunes krait for your work.', multi: true, opts: [
     ['game', 'Building games'], ['web', 'Web development'], ['app', 'App development'],
     ['data', 'Data & AI'], ['school', 'School & learning'], ['explore', 'Just exploring'],
   ]},
@@ -2396,6 +2396,10 @@ const OB_QS = [
   ]},
   { key: 'style', title: 'How do you want krait to answer?', sub: 'You can change this anytime in Capabilities.', opts: [
     ['quick', 'Quick answers'], ['deep', 'Deep, thorough work'], ['both', 'Both - it depends'],
+  ]},
+  { key: 'source', title: 'How did you find krait?', sub: 'Pick as many as apply - it helps me know where to grow.', multi: true, opts: [
+    ['tiktok', 'TikTok / YouTube'], ['reddit', 'Reddit / X / Twitter'], ['friend', 'A friend told me'],
+    ['github', 'GitHub'], ['search', 'Google / search engine'], ['other', 'Somewhere else'],
   ]},
 ];
 let obStep = 0;
@@ -2413,17 +2417,47 @@ function renderObStep(acc) {
   $('ob-sub').textContent = q.sub;
   $('ob-step').textContent = (obStep + 1) + ' / ' + OB_QS.length;
   $('ob-back').style.visibility = obStep > 0 ? 'visible' : 'hidden';
+  // ensure multi answers start as an array
+  if (q.multi && !Array.isArray(acc.answers[q.key])) {
+    acc.answers[q.key] = acc.answers[q.key] ? [acc.answers[q.key]] : [];
+  }
+  const next = $('ob-next');
+  const advance = () => {
+    if (obStep < OB_QS.length - 1) { obStep++; renderObStep(acc); }
+    else { applyOnboarding(acc); }
+  };
+  if (q.multi) {
+    next.style.display = '';
+    next.onclick = () => {
+      if (!(acc.answers[q.key] || []).length) { toast('Pick at least one (or more!)'); return; }
+      advance();
+    };
+  } else {
+    next.style.display = 'none';
+    next.onclick = null;
+  }
   const box = $('ob-opts');
   box.innerHTML = '';
   for (const [val, label] of q.opts) {
     const b = document.createElement('button');
-    b.className = 'ob-opt' + (acc.answers[q.key] === val ? ' active' : '');
+    const isSel = q.multi
+      ? (acc.answers[q.key] || []).includes(val)
+      : acc.answers[q.key] === val;
+    b.className = 'ob-opt' + (isSel ? ' active' : '');
     b.textContent = label;
-    b.onclick = async () => {
-      acc.answers[q.key] = val;
+    b.onclick = () => {
+      if (q.multi) {
+        const arr = acc.answers[q.key] || [];
+        const i = arr.indexOf(val);
+        if (i >= 0) arr.splice(i, 1); else arr.push(val);
+        acc.answers[q.key] = arr;
+        b.classList.toggle('active', arr.includes(val));
+      } else {
+        acc.answers[q.key] = val;
+        advance();
+        return;
+      }
       localStorage.setItem('krait-account', JSON.stringify(acc));
-      if (obStep < OB_QS.length - 1) { obStep++; renderObStep(acc); }
-      else { applyOnboarding(acc); }
     };
     box.appendChild(b);
   }
@@ -2435,9 +2469,10 @@ function applyOnboarding(acc) {
   const a = acc.answers;
   // skills by purpose
   const sk = JSON.parse(localStorage.getItem('krait-skills') || '{}');
-  if (a.purpose === 'game' || a.purpose === 'app') sk.games = true;
-  if (a.purpose === 'web' || a.purpose === 'data') sk.web = true;
-  if (a.purpose === 'school') sk.excel = true;
+  const purposes = Array.isArray(a.purpose) ? a.purpose : [a.purpose];
+  if (purposes.includes('game') || purposes.includes('app')) sk.games = true;
+  if (purposes.includes('web') || purposes.includes('data')) sk.web = true;
+  if (purposes.includes('school')) sk.excel = true;
   localStorage.setItem('krait-skills', JSON.stringify(sk));
   // answer style -> default effort
   const caps = JSON.parse(localStorage.getItem('krait-caps') || '{}');
