@@ -282,8 +282,7 @@ async function init() {
 
   // terminal: type krait / ollama / opencode and get a menu of options
   $('term-in').addEventListener('input', () => {
-    const cmd = $('term-in').value.trim().toLowerCase();
-    renderTermMenu(TERM_COMMANDS[cmd] || null);
+    renderTermMenu(matchTermCmd($('term-in').value.trim()));
   });
   $('term-in').addEventListener('keydown', async e => {
     if (e.key === 'Escape') { renderTermMenu(null); return; }
@@ -291,7 +290,7 @@ async function init() {
     const cmd = $('term-in').value.trim();
     if (!cmd) return;
     $('term-in').value = '';
-    const menu = TERM_COMMANDS[cmd.toLowerCase()];
+    const menu = matchTermCmd(cmd);
     if (menu && !termChatOn) { menu.opts[0].run(); return; }
     if (termChatOn) { termChatSend(cmd); return; }
     termRunShell(cmd);
@@ -1254,6 +1253,12 @@ async function send() {
 
 /** One queued/typed user message = add to chat + run a turn. */
 async function startUserTurn(text, images) {
+  // typing exactly "krait" in the chat box opens the terminal chat instead of a model reply
+  if (String(text || '').trim().toLowerCase() === 'krait' && !(images || []).length) {
+    $('terminal').classList.remove('hidden');
+    startTermChat();
+    return;
+  }
   addMsg('user', text, images);
   const msg = { role: 'user', content: text || 'Describe this image.' };
   if (images.length) msg.images = images;
@@ -2581,6 +2586,11 @@ const TERM_COMMANDS = {
     ],
   },
 };
+function matchTermCmd(cmd) {
+  const lc = String(cmd || '').trim().toLowerCase();
+  const key = Object.keys(TERM_COMMANDS).find(k => lc === k || lc.startsWith(k + ' '));
+  return key ? TERM_COMMANDS[key] : null;
+}
 function termRunShell(cmd) {
   renderTermMenu(null);
   termPrint('$ ' + cmd);
@@ -2606,14 +2616,25 @@ function startTermChat() {
   termConvo = [];
   renderTermMenu(null);
   $('term-in').placeholder = 'you > (type "exit" to leave chat)';
-  termPrint('--- krait terminal chat - type a message, "exit" to leave ---');
+  termPrint('\u2500\u2500\u2500\u2500\u2500\u2500 krait terminal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+  termPrint('chat mode on. Just type. "help", "clear", "exit" also work.');
 }
 async function termChatSend(msg) {
-  if (msg.toLowerCase() === 'exit' || msg.toLowerCase() === 'quit') {
+  const low = msg.toLowerCase();
+  if (low === 'exit' || low === 'quit') {
     termChatOn = false;
     termConvo = [];
     $('term-in').placeholder = '$ command';
     termPrint('--- chat ended ---');
+    return;
+  }
+  if (low === 'clear' || low === 'cls') {
+    $('term-out').textContent = '';
+    termPrint('(cleared)');
+    return;
+  }
+  if (low === 'help') {
+    termPrint('commands: help - this list, clear - wipe the screen, exit - leave chat. Anything else is sent to the model.');
     return;
   }
   termPrint('you > ' + msg);
