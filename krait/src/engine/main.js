@@ -227,8 +227,15 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
       r = await attempt(modelId);
     } catch (err) {
       if (err && err.name === 'AbortError') throw err;
+      const emsg0 = String((err && err.message) || err);
+      if (ns === 'ollama' && /402|payment required/i.test(emsg0)) {
+        throw new Error('Ollama cloud needs a paid plan. Use a local model instead (ollama pull), or pick another provider in the model menu.');
+      }
+      if (ns === 'ollama' && /ECONNREFUSED|ENOTFOUND|fetch failed|connect/i.test(emsg0)) {
+        throw new Error('Ollama is not running on this PC. Start the Ollama app first, or pick another provider in the model menu.');
+      }
       // IMAGE FALLBACK: text-only models reject images outright - switch to a vision model
-      const emsg = String((err && err.message) || err);
+      const emsg = emsg0;
       if (/image/i.test(emsg) && (messages || []).some(m => m.images && m.images.length)) {
         const vm = pickVisionModel(ns);
         if (vm) {
@@ -282,10 +289,11 @@ function pickFallbackModel(failedNs) {
   let have = [];
   try { have = Object.keys(new Keychain(DATA_DIR).list()); } catch {}
   const cached = loadModelCache().data || {};
-  const want = ['ollama', 'nvidia', 'groq', 'cerebras', 'gemini', 'openrouter', 'mistral', 'huggingface', 'github'];
+  // NOTE: no ollama here - it is a local server; if it is not running, fallback must not try it
+  const want = ['nvidia', 'groq', 'cerebras', 'gemini', 'openrouter', 'mistral', 'huggingface', 'github'];
   for (const p of want) {
     if (p === failedNs) continue;
-    const hasKey = have.includes(p) || p === 'ollama';
+    const hasKey = have.includes(p);
     const list = cached[p];
     if (!hasKey || !Array.isArray(list) || !list.length) continue;
     // prefer a solid instruct model

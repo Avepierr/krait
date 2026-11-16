@@ -180,7 +180,7 @@ async function init() {
   });
   $('model-dd-search').addEventListener('input', renderModelDropdown);
   document.querySelectorAll('.dd-profiles button').forEach(b => {
-    b.onclick = () => { pickProfile(b.dataset.prof); $('model-dd-pop').classList.add('hidden'); };
+    b.onclick = () => openProfileDD(b.dataset.prof, b.textContent.trim());
   });
 
   // preview modal
@@ -594,6 +594,54 @@ function extractLiveWrite(raw) {
       }
     }
   }
+  // GLM/Qwen-style tag format (parameter tags or a JSON body inside)
+  {
+    const re = new RegExp(QWEN_RE_OPEN.source, 'g');
+    let last = null;
+    while ((m = re.exec(s)) !== null) last = m;
+    if (last) {
+      const rest = s.slice(last.index + last[0].length);
+      const end = rest.indexOf(QWEN_CLOSE_STR);
+      const body = rest.slice(0, end === -1 ? rest.length : end);
+      const nm = (last[1] || last[2] || '').trim();
+      const pre = new RegExp(QWEN_RE_PARAM.source, 'g');
+      const tags = [];
+      let a;
+      while ((a = pre.exec(body)) !== null) tags.push(a);
+      let path = '', content = '';
+      for (let i = 0; i < tags.length; i++) {
+        const key = tags[i][1] || tags[i][2] || '';
+        const vs = tags[i].index + tags[i][0].length;
+        const ve = i + 1 < tags.length ? tags[i + 1].index : body.length;
+        let v = body.slice(vs, ve);
+        if (v.startsWith('\n')) v = v.slice(1);
+        if (key === 'path' || key === 'file_path') path = v;
+        else if (key === 'content' || key === 'file_text') content = v;
+      }
+      if (path && (nm === 'Write' || content)) return { path, content };
+      if (!tags.length) {
+        const bare = body.trim();
+        let j = null;
+        try { j = JSON.parse(bare); } catch {}
+        if (!j) {
+          const i0 = bare.indexOf('{'), i1 = bare.lastIndexOf('}');
+          if (i0 >= 0 && i1 > i0) { try { j = JSON.parse(bare.slice(i0, i1 + 1)); } catch {} }
+        }
+        if (j) {
+          const inp = (j.input && typeof j.input === 'object') ? j.input : (j.arguments && typeof j.arguments === 'object') ? j.arguments : j;
+          if (inp && inp.path && (j.name === 'Write' || nm === 'Write' || /\.html?\b/i.test(inp.path))) return { path: inp.path, content: inp.content || '' };
+        } else {
+          const pm = /"path"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(bare);
+          const cm = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(bare);
+          if (pm) {
+            const pp = pm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+            const cc = cm ? cm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t') : '';
+            return { path: pp, content: cc };
+          }
+        }
+      }
+    }
+  }
   return null;
 }
 
@@ -651,6 +699,43 @@ function xmlToolChip(body) {
   const w = path ? (/\.(html?|css|js|py|csv|json|md|txt)$/i.test(path) ? 'Writing ' : 'Working on ') : 'Running ';
   return '\u2699 ' + w + arg + '...';
 }
+// GLM/Qwen-style tool-call tags some models emit (assembled via concat)
+const QWEN_RE_OPEN = new RegExp('<' + 'tool_call' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([A-Za-z_][\\w.-]*))?\\s*>', 'g');
+const QWEN_RE_PARAM = new RegExp('<' + 'parameter' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([\\w.]+))?\\s*>', 'g');
+const QWEN_CLOSE_STR = '</' + 'tool_call' + '>';
+
+/** Short chip label from a Qwen/GLM-style tool call body. */
+function qwenToolChip(body) {
+  const pre = new RegExp(QWEN_RE_PARAM.source, 'g');
+  const tags = [];
+  let a;
+  while ((a = pre.exec(body)) !== null) tags.push({ key: a[1] || a[2] || '', i: a.index + a[0].length });
+  let path = '', cmd = '';
+  for (let i = 0; i < tags.length; i++) {
+    const end = i + 1 < tags.length ? tags[i + 1].i : Math.min(body.length, tags[i].i + 400);
+    let v = body.slice(tags[i].i, end).trim();
+    if (v.length > 60) v = v.slice(0, 60);
+    if (['path', 'file_path', 'file', 'filename'].includes(tags[i].key)) path = v;
+    else if (['command', 'cmd'].includes(tags[i].key)) cmd = v;
+  }
+  if (!path && !cmd) {
+    try {
+      const bare = body.trim();
+      const i0 = bare.indexOf('{'), i1 = bare.lastIndexOf('}');
+      if (i0 >= 0 && i1 > i0) {
+        const j = JSON.parse(bare.slice(i0, i1 + 1));
+        const inp = (j.input && typeof j.input === 'object') ? j.input : (j.arguments && typeof j.arguments === 'object') ? j.arguments : j;
+        if (inp && inp.path) path = String(inp.path).slice(0, 60);
+        else if (inp && inp.command) cmd = String(inp.command).slice(0, 60);
+      }
+    } catch {}
+  }
+  const arg = path || cmd;
+  if (!arg) return '\u2699 writing code...';
+  const w = path ? (/\.(html?|css|js|py|csv|json|md|txt)$/i.test(path) ? 'Writing ' : 'Working on ') : 'Running ';
+  return '\u2699 ' + w + arg + '...';
+}
+
 function toolChip(raw) {
   const nm = /"name"\s*:\s*"(\w+)"/.exec(raw);
   if (!nm) return '\u2699 using tool...';
@@ -676,6 +761,20 @@ function cleanStream(raw) {
       const end = rest.indexOf(XML_CLOSE_STR);
       const stop = end === -1 ? rest.length : end + XML_CLOSE_STR.length;
       const chip = xmlToolChip(rest.slice(0, end === -1 ? rest.length : end));
+      cuts.push([mm.index, mm.index + mm[0].length + stop, chip]);
+    }
+    for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + '\n' + cuts[i][2] + '\n' + s.slice(cuts[i][1]);
+  }
+  // GLM/Qwen-style tool_call regions (complete, and a trailing partial while streaming)
+  {
+    const re = new RegExp(QWEN_RE_OPEN.source, 'g');
+    const cuts = [];
+    let mm;
+    while ((mm = re.exec(s)) !== null) {
+      const rest = s.slice(mm.index + mm[0].length);
+      const end = rest.indexOf(QWEN_CLOSE_STR);
+      const stop = end === -1 ? rest.length : end + QWEN_CLOSE_STR.length;
+      const chip = qwenToolChip(rest.slice(0, end === -1 ? rest.length : end));
       cuts.push([mm.index, mm.index + mm[0].length + stop, chip]);
     }
     for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + '\n' + cuts[i][2] + '\n' + s.slice(cuts[i][1]);
@@ -794,6 +893,18 @@ function sanitizeFinal(text) {
       const rest = s.slice(mm.index + mm[0].length);
       const end = rest.indexOf(XML_CLOSE_STR);
       const stop = end === -1 ? rest.length : end + XML_CLOSE_STR.length;
+      cuts.push([mm.index, mm.index + mm[0].length + stop]);
+    }
+    for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + s.slice(cuts[i][1]);
+  }
+  {
+    const re = new RegExp(QWEN_RE_OPEN.source, 'g');
+    const cuts = [];
+    let mm;
+    while ((mm = re.exec(s)) !== null) {
+      const rest = s.slice(mm.index + mm[0].length);
+      const end = rest.indexOf(QWEN_CLOSE_STR);
+      const stop = end === -1 ? rest.length : end + QWEN_CLOSE_STR.length;
       cuts.push([mm.index, mm.index + mm[0].length + stop]);
     }
     for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + s.slice(cuts[i][1]);
@@ -1142,6 +1253,9 @@ function updateTokenInfo() {
   if (K.tokens > 0) {
     el.textContent = K.tokens.toLocaleString() + ' tok';
     el.title = 'Reply tokens used in this chat (prompt tokens excluded - matches your provider dashboard)';
+  } else {
+    el.textContent = '0 tok';
+    el.title = 'Reply tokens used in this chat';
   }
 }
 
@@ -1366,6 +1480,45 @@ async function ensureSession(title) {
   await window.krait.appendSession(K.sessionId, { role: 'user', content: K.messages[K.messages.length - 1].content });
 }
 
+/** Right-click menu for a chat row: Open / Rename / Delete. */
+function openChatCtx(e, s, nameSpan) {
+  closeCtxMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  const mk = (label, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = ev => { ev.stopPropagation(); closeCtxMenu(); fn(); };
+    menu.appendChild(b);
+  };
+  mk('Open', () => { if (s.id !== K.sessionId) resumeSession(s.id); });
+  mk('Rename', () => startRename(s, nameSpan));
+  mk('Delete', async () => {
+    await window.krait.deleteSession(s.id);
+    if (s.id === K.sessionId) newChat();
+    refreshSessionList();
+  });
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  let x = e.clientX, y = e.clientY;
+  if (x + r.width > window.innerWidth - 8) x = window.innerWidth - 8 - r.width;
+  if (y + r.height > window.innerHeight - 8) y = window.innerHeight - 8 - r.height;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  setTimeout(() => {
+    document.addEventListener('click', closeCtxMenu);
+    document.addEventListener('contextmenu', closeCtxMenu);
+    document.addEventListener('keydown', ctxKeyClose);
+  }, 0);
+}
+function ctxKeyClose(e) { if (e.key === 'Escape') closeCtxMenu(); }
+function closeCtxMenu() {
+  document.querySelectorAll('.ctx-menu').forEach(m => m.remove());
+  document.removeEventListener('click', closeCtxMenu);
+  document.removeEventListener('contextmenu', closeCtxMenu);
+  document.removeEventListener('keydown', ctxKeyClose);
+}
+
 /** Inline chat rename (pencil button in the sidebar). */
 function startRename(s, span) {
   const input = document.createElement('input');
@@ -1405,11 +1558,7 @@ async function refreshSessionList() {
     name.textContent = (s.name || 'chat').slice(0, 22);
     el.title = 'Open chat';
     el.onclick = () => { if (s.id !== K.sessionId) resumeSession(s.id); };
-    const pen = document.createElement('span');
-    pen.className = 's-del';
-    pen.textContent = '\u270e';
-    pen.title = 'Rename chat';
-    pen.onclick = e => { e.stopPropagation(); startRename(s, name); };
+    el.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); openChatCtx(e, s, name); };
     const del = document.createElement('span');
     del.className = 's-del';
     del.textContent = '\u00d7';
@@ -1421,7 +1570,6 @@ async function refreshSessionList() {
       refreshSessionList();
     };
     el.appendChild(name);
-    el.appendChild(pen);
     el.appendChild(del);
     box.appendChild(el);
   }
@@ -1435,6 +1583,8 @@ async function resumeSession(id) {
     currentAssistant = null;   // detach any live stream from the previous chat
     resetToolGroup();
     K.sessionId = id;
+    K.tokens = 0;              // tokens are counted per chat - do not carry the old chat's count over
+    updateTokenInfo();
     // sanitize: old chats may contain raw tool-call debris - never render that
     K.messages = msgs.map(m => ({
       role: m.role,
@@ -2071,12 +2221,27 @@ function renderModelDropdown() {
   };
   const favs = favList();
   const items = (K.modelList || []).filter(m => {
+    if (ddProfileFilter && !ddProfileFilter.has(m.ns + '/' + m.id)) return false;
     if (!q) return true;
     return (m.ns + ' ' + m.id + ' ' + m.name).toLowerCase().includes(q);
   });
   const favItems = items.filter(m => favs.includes(m.ns + '/' + m.id));
   const rest = items.filter(m => !favs.includes(m.ns + '/' + m.id));
   list.innerHTML = '';
+  if (ddProfileFilter) {
+    const h = document.createElement('div');
+    h.className = 'dd-group dd-filter';
+    const lbl = document.createElement('span');
+    lbl.textContent = ddProfileLabel;
+    h.appendChild(lbl);
+    const clear = document.createElement('button');
+    clear.className = 'dd-filter-x';
+    clear.textContent = '\u00d7 clear';
+    clear.title = 'Show all models';
+    clear.onclick = e => { e.stopPropagation(); ddProfileFilter = null; ddProfileLabel = ''; renderModelDropdown(); };
+    h.appendChild(clear);
+    list.appendChild(h);
+  }
   const addRow = m => {
     const full = m.ns + '/' + m.id;
     const row = document.createElement('div');
@@ -2111,7 +2276,39 @@ function renderModelDropdown() {
   if (!items.length) list.innerHTML = '<div class="dd-empty">No models match.</div>';
 }
 
+let ddProfileFilter = null;
+let ddProfileLabel = '';
+/** Models matching a profile chip (Fast / Smart / Vision / Local). */
+function profileMatches(kind) {
+  const L = K.modelList || [];
+  if (kind === 'fast') {
+    return L.filter(m => m.ns !== 'ollama' && (/flash|8b|mini|nano|small/i.test(m.id) || m.ns === 'cerebras' || m.ns === 'groq'));
+  }
+  if (kind === 'smart') {
+    return L.filter(m => m.ns !== 'ollama' && /nemotron-3-ultra|deepseek-v4|qwen3-32b|gpt-oss-120b|70b|sonnet|opus|ultra|72b|120b|large/i.test(m.id));
+  }
+  if (kind === 'vision') {
+    return L.filter(m => m.vision || isVisionModel(m.ns + '/' + m.id));
+  }
+  if (kind === 'local') {
+    return L.filter(m => m.ns === 'ollama');
+  }
+  return [];
+}
+/** Open the model dropdown filtered to a profile - the user picks, nothing is auto-equipped. */
+function openProfileDD(kind, label) {
+  const list = profileMatches(kind);
+  if (!list.length) { toast('No model available for that profile - add a key or install Ollama'); return; }
+  ddProfileFilter = new Set(list.map(m => m.ns + '/' + m.id));
+  ddProfileLabel = (label || kind) + ' models';
+  $('model-dd-search').value = '';
+  renderModelDropdown();
+  $('model-dd-pop').classList.remove('hidden');
+}
+
 function pickModel(full, vision) {
+  ddProfileFilter = null;
+  ddProfileLabel = '';
   const sel = $('model-select');
   const notice = K.model && K.model !== full;
   K.model = full;

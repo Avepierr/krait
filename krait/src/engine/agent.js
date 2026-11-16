@@ -104,16 +104,107 @@ function parseXmlToolBlocks(text) {
   return calls;
 }
 
+// GLM/Qwen-style tool-call tags some models emit (assembled via concat)
+const QWEN_OPEN_RE = new RegExp('<' + 'tool_call' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([A-Za-z_][\\w.-]*))?\\s*>', 'g');
+const QWEN_PARAM_RE = new RegExp('<' + 'parameter' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([\\w.]+))?\\s*>', 'g');
+const QWEN_CLOSE = '</' + 'tool_call' + '>';
+
+/** Parse tool_call-style tool calls (same two shapes: parameter tags, or a JSON body). */
+function parseQwenToolBlocks(text) {
+  if (!new RegExp(QWEN_OPEN_RE.source).test(text)) return [];
+  const calls = [];
+  QWEN_OPEN_RE.lastIndex = 0;
+  let m;
+  while ((m = QWEN_OPEN_RE.exec(text)) !== null) {
+    const rawName = m[1] || m[2] || '';
+    const rest = text.slice(m.index + m[0].length);
+    let end = rest.indexOf(QWEN_CLOSE);
+    if (end === -1) {
+      const nextOpen = new RegExp(QWEN_OPEN_RE.source).exec(rest);
+      end = nextOpen ? nextOpen.index : rest.length;
+    }
+    const body = rest.slice(0, end);
+    const args = {};
+    {
+      const pre = new RegExp(QWEN_PARAM_RE.source, 'g');
+      const tags = [];
+      let a;
+      while ((a = pre.exec(body)) !== null) tags.push(a);
+      for (let i = 0; i < tags.length; i++) {
+        const key = tags[i][1] || tags[i][2] || '';
+        const valStart = tags[i].index + tags[i][0].length;
+        const valEnd = i + 1 < tags.length ? tags[i + 1].index : body.length;
+        let v = body.slice(valStart, valEnd);
+        if (v.startsWith('\r\n')) v = v.slice(2);
+        else if (v.startsWith('\n')) v = v.slice(1);
+        if (key && key !== 'value') args[key] = v;
+      }
+    }
+    // some models put the args as a plain JSON object inside the tag body
+    {
+      const bare = body.replace(new RegExp(QWEN_PARAM_RE.source, 'g'), '').trim();
+      let j = null;
+      try { j = JSON.parse(bare); } catch {}
+      if (!j && bare.includes('{')) {
+        const s0 = bare.indexOf('{'), s1 = bare.lastIndexOf('}');
+        if (s0 >= 0 && s1 > s0) { try { j = JSON.parse(bare.slice(s0, s1 + 1)); } catch {} }
+      }
+      if (j && typeof j === 'object' && !Array.isArray(j)) {
+        const inp = (j.input && typeof j.input === 'object') ? j.input : (j.arguments && typeof j.arguments === 'object') ? j.arguments : j;
+        for (const [k, v] of Object.entries(inp)) {
+          const kk = (k === 'file_path' || k === 'file' || k === 'filename') ? 'path'
+            : (k === 'file_text' || k === 'new_content') ? 'content' : k;
+          if (args[kk] === undefined && typeof v === 'string') args[kk] = v;
+        }
+      }
+    }
+    const keys = Object.keys(args);
+    let name = KNOWN_TOOLS.has(rawName) ? rawName : null;
+    if (!name) {
+      // the tool name may come from a JSON {"name": ...} body
+      try {
+        const bare2 = body.trim();
+        const s0 = bare2.indexOf('{'), s1 = bare2.lastIndexOf('}');
+        if (s0 >= 0 && s1 > s0) {
+          const j2 = JSON.parse(bare2.slice(s0, s1 + 1));
+          if (j2 && typeof j2.name === 'string' && KNOWN_TOOLS.has(j2.name)) name = j2.name;
+        }
+      } catch {}
+    }
+    if (!name) {
+      if (keys.includes('question')) name = 'Ask';
+      else if (keys.includes('command')) name = 'Bash';
+      else if (keys.includes('old_string') || keys.includes('new_string')) name = 'Edit';
+      else if (keys.includes('url')) name = 'WebFetch';
+      else if (keys.includes('pattern')) name = keys.includes('path') ? 'Grep' : 'Glob';
+      else if (keys.includes('content') || keys.includes('file_text')) name = 'Write';
+      else if (keys.includes('path') || keys.includes('file_path')) name = 'Read';
+    }
+    if (!name) continue;
+    const input = {};
+    for (const [k, v] of Object.entries(args)) {
+      const kk = (k === 'file_path' || k === 'file' || k === 'filename') ? 'path'
+        : (k === 'file_text' || k === 'new_content') ? 'content' : k;
+      input[kk] = (kk === 'content') ? String(v).replace(/[\s ]+$/, '') : String(v).replace(/\s+$/, '');
+    }
+    if (input.path || input.command || input.url || input.pattern || input.question) calls.push({ name, input });
+  }
+  return calls;
+}
 // User asked to create/build something?
 const CREATE_RE = /\b(build|create|make|generate|write|code)\b/i;
 const LANG_EXT = {
   html: 'html', js: 'js', javascript: 'js', jsx: 'jsx', ts: 'ts', css: 'css',
   python: 'py', py: 'py', csv: 'csv', json: 'json', md: 'markdown', txt: 'text',
-  bash: 'sh', sh: 'sh',
+  bash: 'sh', sh: 'sh', rust: 'rs', rs: 'rs', cpp: 'cpp', 'c++': 'cpp', cxx: 'cpp', cc: 'cpp',
+  c: 'c', go: 'go', golang: 'go', java: 'java', csharp: 'cs', cs: 'cs', php: 'php',
+  ruby: 'rb', rb: 'rb', kotlin: 'kt', kt: 'kt', swift: 'swift', zig: 'zig', lua: 'lua', sql: 'sql',
 };
 const DEFAULT_NAME = {
   html: 'app.html', js: 'app.js', css: 'style.css', py: 'script.py',
   csv: 'data.csv', json: 'data.json', markdown: 'doc.md', text: 'notes.txt', sh: 'run.sh',
+  rs: 'app.rs', cpp: 'app.cpp', c: 'app.c', go: 'main.go', java: 'App.java', cs: 'Program.cs',
+  php: 'index.php', rb: 'app.rb', kt: 'App.kt', swift: 'App.swift', zig: 'app.zig', lua: 'app.lua', sql: 'query.sql',
 };
 
 /**
@@ -140,7 +231,7 @@ async function autoSaveCodeDumps({ text, toolset, sendTool, askPermission, baseD
   for (let n = blocks.length - 1; n >= 0; n--) {
     const b = blocks[n];
     // filename: prefer one the model mentioned near the block (e.g. "save as game.html")
-    const fm = /([\w.-]+\.(?:html?|js|jsx|ts|css|py|csv|json|md|txt|sh))\b/i.exec(b.pre);
+    const fm = /([\w.-]+\.(?:html?|js|jsx|ts|css|py|csv|json|md|txt|sh|rs|cpp|cxx|cc|c|h|hpp|go|java|cs|php|rb|kt|swift|zig|lua|sql))\b/i.exec(b.pre);
     let name = fm ? fm[1] : (DEFAULT_NAME[LANG_EXT[b.lang] || b.lang] || null);
     if (!name) continue;
     let pathOut = name;
@@ -183,6 +274,7 @@ function toolPrompt(enabled) {
   }
   s += '- Ask: show the user a question in the chat and WAIT for their typed answer. Args: {"question": "your question"}\n';
   s += 'RULES for Ask: if you are missing information you genuinely need (a choice between options, a name, a path, a preference), use Ask instead of guessing. Keep the question short. Do not overuse it.';
+  s += 'LANGUAGES: krait writes code in ANY language the user asks for - HTML/CSS/JS, Python, Rust, C++, C, Go, Java, C#, PHP, Ruby, Kotlin, Lua, SQL and more. Use the correct file extension for the language. To compile or run what you built, use the Bash tool (for example: python file.py, cargo run, g++ file.cpp -o app and run it, go run main.go).';
   s += '\nPaths are relative to the project root. After using tools, give the user a short, clear answer and mention they can download created files from the card in the chat.';
   return s;
 }
@@ -191,6 +283,8 @@ function parseToolBlocks(text) {
   const calls = [];
   let m;
   for (const x of parseXmlToolBlocks(text)) calls.push(x);
+  if (calls.length) return calls;
+  for (const x of parseQwenToolBlocks(text)) calls.push(x);
   if (calls.length) return calls;
   TOOL_BLOCK_RE.lastIndex = 0;
   while ((m = TOOL_BLOCK_RE.exec(text)) !== null) {
@@ -244,6 +338,19 @@ function stripToolBlocks(text) {
       cuts.push([mm.index, mm.index + mm[0].length + stop]);
     }
     for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + s.slice(cuts[i][1]);
+  }
+  {
+    // also remove GLM/Qwen-style tool_call regions
+    const re2 = new RegExp(QWEN_OPEN_RE.source, 'g');
+    const cuts2 = [];
+    let mm2;
+    while ((mm2 = re2.exec(s)) !== null) {
+      const rest2 = s.slice(mm2.index + mm2[0].length);
+      const end2 = rest2.indexOf(QWEN_CLOSE);
+      const stop2 = end2 === -1 ? rest2.length : end2 + QWEN_CLOSE.length;
+      cuts2.push([mm2.index, mm2.index + mm2[0].length + stop2]);
+    }
+    for (let i = cuts2.length - 1; i >= 0; i--) s = s.slice(0, cuts2[i][0]) + s.slice(cuts2[i][1]);
   }
   s = s.replace(TOOL_BLOCK_RE, '');
   // also strip bare inline tool JSON from the visible answer
@@ -300,7 +407,7 @@ async function runAgent(deps) {
     ? '\nSKILLS - extra instructions for this job:\n' + opts.skills.join('\n')
     : '';
   const sysExtra = (tools || '') + skills;
-  const convo = messages.map(m => ({ role: m.role, content: m.content }));
+  const convo = messages.map(m => ({ role: m.role, content: m.content, ...(m.images && m.images.length ? { images: m.images } : {}) }));
 
   let finalText = '';
   let usage = null;
