@@ -298,9 +298,10 @@ function pickFallbackModel(failedNs) {
     const hasKey = have.includes(p);
     const list = cached[p];
     if (!hasKey || !Array.isArray(list) || !list.length) continue;
-    // prefer a solid instruct model
+    // prefer a solid instruct model - free ids first (openrouter :free tier)
     const stable = list.filter(m => !/preview|beta|exp|\brc\b|dev/i.test(m.id));
-    const pool = stable.length ? stable : list;
+    const stableFree = stable.filter(m => /:free/i.test(m.id));
+    const pool = stableFree.length ? stableFree : (stable.length ? stable : list);
     const pick = pool.find(m => /coder|instruct|70b|8b|flash|ultra/i.test(m.id)) || pool[0];
     return p + '/' + pick.id;
   }

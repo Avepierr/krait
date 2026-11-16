@@ -21,7 +21,7 @@ const VERSION = require('../package.json').version;
 const UPDATE_URL = 'https://raw.githubusercontent.com/Avepier/krait/main/version.json';
 
 const DEFAULTS = {
-  openrouter: 'openrouter/meta-llama/llama-3.3-70b-instruct',
+  openrouter: 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free',
   nvidia: 'nvidia/meta/llama-3.1-70b-instruct',
   gemini: 'gemini/gemini-2.0-flash',
   anthropic: 'anthropic/claude-sonnet-4',
@@ -105,7 +105,16 @@ function pickDefault() {
     const saved = JSON.parse(fs.readFileSync(path.join(DATA, 'cli-model.json'), 'utf8'));
     if (saved.model) return saved.model;
   } catch {}
+  // free first: the newest :free model straight from the live catalog, per provider priority
+  const cat = catalogModels();
   const have = haveKeys();
+  const want = ['openrouter', 'gemini', 'groq', 'cerebras', 'mistral', 'huggingface', 'github', 'nvidia'];
+  for (const ns of want) {
+    if (!have.includes(ns)) continue;
+    const list = (cat[ns] || []).filter(m => !/preview|beta|exp|\brc\b|dev/i.test(m.id));
+    const free = list.filter(m => /:free/i.test(m.id));
+    if (free.length) return ns + '/' + free[0].id;
+  }
   return have.length ? DEFAULTS[have[0]] : null;
 }
 function catalogModels() {
@@ -232,7 +241,12 @@ function modelMenuItems() {
     if (q && !r.toLowerCase().includes(q)) continue;
     items.push({ label: (r === model ? '\u25CF ' : '') + r, hint: '', run: () => { switchModel(r); if (TTY) { renderIdle(); rl.prompt(); } else if (PUMP) { pumpIdle(); } } });
   }
-  for (const ns of have) push(ns, (cat[ns] || []).slice(0, 8));
+  for (const ns of have) {
+    // free models first, then the rest of the catalog
+    push(ns, (cat[ns] || []).slice()
+      .sort((a, b) => (/:free/i.test(b.id) ? 1 : 0) - (/:free/i.test(a.id) ? 1 : 0))
+      .slice(0, 8));
+  }
   return items;
 }
 function openModelMenu() { openMenu({ title: 'Select model', items: modelMenuItems, searchable: true }); }
@@ -295,12 +309,30 @@ async function askUser(q) {
   return (await subLine()).trim();
 }
 
+/** Another configured provider, free models first - used when the current one rate-limits. */
+function pickCliFallback(failedNs) {
+  const have = haveKeys();
+  const cat = catalogModels();
+  // openrouter first (reliable free tier), nvidia LAST - some catalog ids 404 there
+  const want = ['openrouter', 'gemini', 'groq', 'cerebras', 'mistral', 'huggingface', 'github', 'nvidia'];
+  for (const p of want) {
+    if (p === failedNs || !have.includes(p)) continue;
+    const list = (cat[p] || []).filter(m => !/preview|beta|exp|\brc\b|dev/i.test(m.id));
+    const free = list.filter(m => /:free/i.test(m.id));
+    if (free.length) return p + '/' + free[0].id;
+    if (list.length) return p + '/' + list[0].id;
+    return p + '/' + DEFAULTS[p];
+  }
+  return null;
+}
+
 async function chatTurn(input) {
   busy = true;
   convo.push({ role: 'user', content: input });
   if (!TTY) out(G + 'krait > ' + R);
   let streamed = '';
-  try {
+  const attempt = async () => {
+    streamed = '';
     if (agentMode) {
       const res = await runAgent({
         modelId: model,
@@ -321,14 +353,45 @@ async function chatTurn(input) {
       if (res.usage && res.usage.total) out(DIM + '  (' + res.usage.total + ' tok)' + R + '\n');
       convo.push({ role: 'assistant', content: res.text || streamed });
     }
+  };
+  try {
+    try {
+      await attempt();
+    } catch (e) {
+      const em = String((e && e.message) || e);
+      const fb = /429|rate-limit/i.test(em) ? pickCliFallback(String(model).split('/')[0]) : null;
+      if (fb) {
+        // free tier ran dry - hop to another free provider instead of showing an error
+        out('\n' + Y + '  daily free limit reached on ' + model + ' - switching to ' + fb + ' (resets tomorrow)' + R + '\n');
+        model = fb;
+        rememberRecent(fb);
+        await attempt();
+      } else {
+        throw e;
+      }
+    }
   } catch (e) {
-    out('\n' + Y + '  error: ' + e.message + R + '\n');
+    const em = String((e && e.message) || e);
+    if (/429|rate-limit/i.test(em)) {
+      out('\n' + Y + '  free limit reached on every provider you have a key for - try again after the daily reset, or add another free key in the krait app (Settings > API keys)' + R + '\n');
+    } else {
+      out('\n' + Y + '  error: ' + em + R + '\n');
+    }
   }
   out('\n');
   busy = false;
 }
 
-function bye() { out('\n' + DIM + '  bye - krait by Avepier' + R + '\n'); process.exit(0); }
+/** Exit without dropping buffered stdout (process.exit discards pending pipe writes). */
+function exitSoon(code) {
+  let done = false;
+  const fin = () => { if (!done) { done = true; process.exit(code); } };
+  // non-empty marker: its callback fires only after this (and every earlier) write has flushed
+  process.stdout.write(' ', fin);
+  setTimeout(fin, 500).unref();
+}
+
+function bye() { out('\n' + DIM + '  bye - krait by Avepier' + R + '\n'); exitSoon(0); }
 
 // ── logo ──
 // block letters spell K-R-A-I-T, column-verified (each letter 5 wide, 5 tall)
@@ -412,7 +475,9 @@ function listModels() {
   if (!have.length) { out(Y + '  no API keys found - add one in the desktop app (Settings > API keys)' + R + '\n'); return; }
   for (const ns of have) {
     out(G + '  ' + ns + R + '\n');
-    const list = (cat[ns] || []).slice(0, 6);
+    const list = (cat[ns] || []).slice()
+      .sort((a, b) => (/:free/i.test(b.id) ? 1 : 0) - (/:free/i.test(a.id) ? 1 : 0))
+      .slice(0, 8);
     if (list.length) for (const m of list) out(DIM + '    ' + ns + '/' + m.id + (m.vision ? ' (vision)' : '') + R + '\n');
     else out(DIM + '    ' + DEFAULTS[ns] + R + '\n');
   }
@@ -441,6 +506,7 @@ function main() {
   } else {
     out(DIM + 'krait v' + VERSION + ' - by Avepier - /help for commands' + R + '\n');
   }
-  repl().catch(e => { out('\n' + Y + 'fatal: ' + e.message + R + '\n'); process.exit(1); });
+  repl().catch(e => { out('\n' + Y + 'fatal: ' + e.message + R + '\n'); exitSoon(1); });
 }
-main();
+module.exports = { pickCliFallback };
+if (require.main === module) main();

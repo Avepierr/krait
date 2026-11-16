@@ -476,7 +476,12 @@ async function init() {
       input.focus();
     });
     window.krait.onFallback(info => {
-      toast('Provider failed (' + info.from + ') \u2014 retried with ' + info.to);
+      const em = String(info.error || '');
+      if (/rate-limit|429/i.test(em)) {
+        toast('Daily free limit reached on ' + info.from + ' \u2014 switched you to another free model (' + info.to + '). Resets tomorrow.');
+      } else {
+        toast('Provider failed (' + info.from + ') \u2014 retried with ' + info.to);
+      }
     });
   }
 
@@ -2650,7 +2655,7 @@ let termAgentOn = false;
 let termPickOn = false;
 let termConvo = [];
 let termLaunch = null; // { cmd, more, idx, items }
-const TERM_VERSION = '1.9.4';
+const TERM_VERSION = '1.9.5';
 function shortModelId(full) { return String(full || '').split('/').pop() || 'none'; }
 function ollamaModel() {
   const list = (K.modelList || []).filter(m => m.ns === 'ollama');
@@ -3019,6 +3024,11 @@ async function fillModelSelect(keys) {
   const liveData = (live && live.data) || {};
   for (const [ns, list] of Object.entries(liveData)) {
     if (Array.isArray(list) && list.length) cat.set(ns, list);
+  }
+
+  // free models first in every list (stable sort, keeps names order inside each group)
+  for (const [, list] of cat) {
+    list.sort((a, b) => (/:free/i.test(b.id) ? 1 : 0) - (/:free/i.test(a.id) ? 1 : 0));
   }
 
   let any = false;
