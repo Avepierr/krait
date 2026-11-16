@@ -19,7 +19,69 @@ const path = require('path');
 
 const TOOL_BLOCK_RE = /```tool\s*\n?([\s\S]*?)```/g;
 const MAX_ROUNDS = 6;
-const READ_ONLY = new Set(['Read', 'Glob', 'Grep', 'WebFetch']);
+
+const KNOWN_TOOLS = new Set(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebFetch']);
+// XML-style tool calls some models emit instead of the fenced block
+const __PRE = String.fromCharCode(97, 110, 116, 109, 108, 58);
+const __LT = String.fromCharCode(60);
+const __GT = String.fromCharCode(62);
+const XML_OPEN_RE = new RegExp(__LT + __PRE + 'invoke' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([A-Za-z_][\\w.-]*))?\\s*>', 'g');
+const XML_PARAM_RE = new RegExp(__LT + __PRE + 'parameter' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([\\w.]+))?\\s*>', 'g');
+const XML_CLOSE = __LT + String.fromCharCode(47) + __PRE + 'invoke' + __GT;
+
+/** Parse XML-style tool calls; returns [] when none present. */
+function parseXmlToolBlocks(text) {
+  if (!new RegExp(XML_OPEN_RE.source).test(text)) return [];
+  const calls = [];
+  XML_OPEN_RE.lastIndex = 0;
+  let m;
+  while ((m = XML_OPEN_RE.exec(text)) !== null) {
+    const rawName = m[1] || m[2] || '';
+    const rest = text.slice(m.index + m[0].length);
+    let end = rest.indexOf(XML_CLOSE);
+    if (end === -1) {
+      const nextOpen = new RegExp(XML_OPEN_RE.source).exec(rest);
+      end = nextOpen ? nextOpen.index : rest.length;
+    }
+    const body = rest.slice(0, end);
+    const args = {};
+    {
+      const pre = new RegExp(XML_PARAM_RE.source, 'g');
+      const tags = [];
+      let a;
+      while ((a = pre.exec(body)) !== null) tags.push(a);
+      for (let i = 0; i < tags.length; i++) {
+        const key = tags[i][1] || tags[i][2] || '';
+        const valStart = tags[i].index + tags[i][0].length;
+        const valEnd = i + 1 < tags.length ? tags[i + 1].index : body.length;
+        let v = body.slice(valStart, valEnd);
+        // the tag ends and the value starts on the next line - drop one newline
+        if (v.startsWith('\r\n')) v = v.slice(2);
+        else if (v.startsWith('\n')) v = v.slice(1);
+        if (key) args[key] = v;
+      }
+    }
+    const keys = Object.keys(args);
+    let name = KNOWN_TOOLS.has(rawName) ? rawName : null;
+    if (!name) {
+      if (keys.includes('command')) name = 'Bash';
+      else if (keys.includes('old_string') || keys.includes('new_string')) name = 'Edit';
+      else if (keys.includes('url')) name = 'WebFetch';
+      else if (keys.includes('pattern')) name = keys.includes('path') ? 'Grep' : 'Glob';
+      else if (keys.includes('content') || keys.includes('file_text')) name = 'Write';
+      else if (keys.includes('path') || keys.includes('file_path')) name = 'Read';
+    }
+    if (!name) continue;
+    const input = {};
+    for (const [k, v] of Object.entries(args)) {
+      const kk = (k === 'file_path' || k === 'file' || k === 'filename') ? 'path'
+        : (k === 'file_text' || k === 'new_content') ? 'content' : k;
+      input[kk] = (kk === 'content') ? String(v).replace(/[\s ]+$/, '') : String(v).replace(/\s+$/, '');
+    }
+    if (input.path || input.command || input.url || input.pattern) calls.push({ name, input });
+  }
+  return calls;
+}
 
 // User asked to create/build something?
 const CREATE_RE = /\b(build|create|make|generate|write|code)\b/i;
@@ -104,6 +166,8 @@ function toolPrompt(enabled) {
 function parseToolBlocks(text) {
   const calls = [];
   let m;
+  for (const x of parseXmlToolBlocks(text)) calls.push(x);
+  if (calls.length) return calls;
   TOOL_BLOCK_RE.lastIndex = 0;
   while ((m = TOOL_BLOCK_RE.exec(text)) !== null) {
     try {
@@ -142,7 +206,22 @@ function parseToolBlocks(text) {
 }
 
 function stripToolBlocks(text) {
-  let s = text.replace(TOOL_BLOCK_RE, '');
+  let s = text;
+  {
+    // remove XML-style tool call regions entirely
+    const re = new RegExp(XML_OPEN_RE.source, 'g');
+    const closeRe = XML_CLOSE;
+    const cuts = [];
+    let mm;
+    while ((mm = re.exec(s)) !== null) {
+      const rest = s.slice(mm.index + mm[0].length);
+      const end = rest.indexOf(closeRe);
+      const stop = end === -1 ? rest.length : end + closeRe.length;
+      cuts.push([mm.index, mm.index + mm[0].length + stop]);
+    }
+    for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + s.slice(cuts[i][1]);
+  }
+  s = s.replace(TOOL_BLOCK_RE, '');
   // also strip bare inline tool JSON from the visible answer
   const NAMES = 'Read|Write|Edit|Bash|Glob|Grep|WebFetch';
   const startRe = new RegExp('\\{\\s*"name"\\s*:\\s*"(' + NAMES + ')"', 'g');

@@ -191,11 +191,12 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
   };
   let final = { text: '', usage: null };
 
-  try {
-    // With tools enabled → agent loop (tool calls + permission popups)
+  const attempt = async mid => {
+    const ans = String(mid).split('/')[0];
+    let f = { text: '', usage: null };
     if (o.enabledTools && o.enabledTools.length) {
-      final = await runAgent({
-        modelId,
+      f = await runAgent({
+        modelId: mid,
         messages: messages || [],
         opts: { ...o, projectDir: activeProjectDir() },
         signal: currentAbort.signal,
@@ -209,15 +210,30 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
         streamChat,
       });
     } else {
-      // plain chat, no tools
-      const r = await streamChat(modelId, messages || [], delta => {
+      const r = await streamChat(mid, messages || [], delta => {
         if (!event.sender.isDestroyed()) event.sender.send('krait:delta', delta);
       }, currentAbort.signal, o);
-      final = { text: r.text, usage: r.usage };
+      f = { text: r.text, usage: r.usage };
+    }
+    return { f, ans };
+  };
+
+  try {
+    let r;
+    try {
+      r = await attempt(modelId);
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw err;
+      // AUTO-FALLBACK: the provider failed (rate limit, dead model...) → retry once
+      // on another configured provider so the chat keeps working.
+      const fb = pickFallbackModel(ns);
+      if (!fb) throw err;
+      if (!event.sender.isDestroyed()) event.sender.send('krait:fallback', { from: ns, to: fb.split('/')[0], error: String(err.message || err).slice(0, 160) });
+      r = await attempt(fb);
     }
 
-    if (final.usage) recordUsage(ns, final.usage);
-    return { text: final.text, usage: final.usage };
+    if (r.f.usage) recordUsage(r.ans, r.f.usage);
+    return { text: r.f.text, usage: r.f.usage };
   } catch (err) {
     if (err && err.name === 'AbortError') return { text: final.text, aborted: true };
     return { error: String((err && err.message) || err) };
@@ -225,6 +241,24 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
     currentAbort = null;
   }
 });
+
+/** Pick a fallback model from a different configured provider (live catalog first). */
+function pickFallbackModel(failedNs) {
+  let have = [];
+  try { have = Object.keys(new Keychain(DATA_DIR).list()); } catch {}
+  const cached = loadModelCache().data || {};
+  const want = ['ollama', 'nvidia', 'groq', 'cerebras', 'gemini', 'openrouter', 'mistral', 'huggingface', 'github'];
+  for (const p of want) {
+    if (p === failedNs) continue;
+    const hasKey = have.includes(p) || p === 'ollama';
+    const list = cached[p];
+    if (!hasKey || !Array.isArray(list) || !list.length) continue;
+    // prefer a solid instruct model
+    const pick = list.find(m => /coder|instruct|70b|8b|flash|ultra/i.test(m.id)) || list[0];
+    return p + '/' + pick.id;
+  }
+  return null;
+}
 
 /** Polished in-window permission popup (falls back to the native dialog). */
 async function askViaDialog(req) {
@@ -363,6 +397,50 @@ ipcMain.handle('krait:open-file', async (_, p) => {
   const { shell } = require('electron');
   await shell.openPath(full);
   return { ok: true };
+});
+
+// ─── File viewer (live preview of what the AI creates) ───
+ipcMain.handle('krait:read-file', (_, p) => {
+  try {
+    const full = path.isAbsolute(p) ? p : path.join(activeProjectDir(), p);
+    if (!fs.existsSync(full)) return { ok: false, error: 'not found' };
+    const st = fs.statSync(full);
+    if (st.size > 3 * 1024 * 1024) return { ok: false, error: 'file too large to preview' };
+    return { ok: true, content: fs.readFileSync(full, 'utf8'), mtime: st.mtimeMs };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// save arbitrary text (export chat as markdown)
+ipcMain.handle('krait:save-text', async (_, { title, content }) => {
+  if (!win) return { ok: false, error: 'no window' };
+  const { dialog } = require('electron');
+  const r = await dialog.showSaveDialog(win, {
+    title: title || 'Save file',
+    defaultPath: (title || 'krait-export').replace(/[^\w -]/g, '') + '.md',
+  });
+  if (r.canceled || !r.filePath) return { ok: false, error: 'cancelled' };
+  try { fs.writeFileSync(r.filePath, content, 'utf8'); return { ok: true, savedTo: r.filePath }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ─── Ollama model downloader ───
+const OLLAMA_POPULAR = ['qwen3:4b', 'llama3.2:3b', 'gemma3:4b', 'deepseek-r1:8b', 'qwen2.5-coder:7b', 'phi4-mini'];
+ipcMain.handle('krait:ollama-status', async () => {
+  try {
+    const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return { installed: false };
+    const j = await r.json();
+    return { installed: true, models: (j.models || []).map(m => m.name) };
+  } catch { return { installed: false }; }
+});
+ipcMain.handle('krait:ollama-pull', (_, model) => {
+  return new Promise(resolve => {
+    exec('ollama pull ' + String(model).replace(/[^\w.:/-]/g, ''), {
+      timeout: 30 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+    }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: String(stdout || stderr || '').slice(-2000) });
+    });
+  });
 });
 
 // ─── Git changes (for the Changes panel) ───

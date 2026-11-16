@@ -167,6 +167,88 @@ async function init() {
     else if (v === 'max') toast('Max effort: noticeably more tokens per reply.');
   });
 
+  // model dropdown
+  $('model-dd-btn').onclick = e => {
+    e.stopPropagation();
+    const pop = $('model-dd-pop');
+    pop.classList.toggle('hidden');
+    if (!pop.classList.contains('hidden')) { renderModelDropdown(); $('model-dd-search').focus(); }
+  };
+  document.addEventListener('click', e => {
+    const pop = $('model-dd-pop');
+    if (pop && !pop.classList.contains('hidden') && !$('model-dd').contains(e.target)) pop.classList.add('hidden');
+  });
+  $('model-dd-search').addEventListener('input', renderModelDropdown);
+  document.querySelectorAll('.dd-profiles button').forEach(b => {
+    b.onclick = () => { pickProfile(b.dataset.prof); $('model-dd-pop').classList.add('hidden'); };
+  });
+
+  // preview modal
+  $('pv-close').onclick = closePreview;
+  $('pv-tab-render').onclick = () => setPvTab(true);
+  $('pv-tab-code').onclick = () => setPvTab(false);
+
+  // retry / regenerate
+  $('btn-retry').onclick = regenerate;
+
+  // export chat
+  const doExport = exportChat;
+  $('btn-export').onclick = doExport;
+  $('pm-export').onclick = () => { $('profile-menu').classList.add('hidden'); exportChat(); };
+
+  // prompt library (slash menu)
+  prompt.addEventListener('input', () => {
+    const v = prompt.value;
+    if (v === '/') showPromptMenu();
+    else $('prompt-menu').classList.add('hidden');
+  });
+  $('prompt-menu').addEventListener('click', e => {
+    const it = e.target.closest('.pm-prompt');
+    if (it) {
+      prompt.value = it.dataset.text;
+      $('prompt-menu').classList.add('hidden');
+      prompt.focus();
+    } else if (e.target.id === 'pm-save-prompt' && prompt.value.trim().length > 1) {
+      const saved = JSON.parse(localStorage.getItem('krait-prompts') || '[]');
+      saved.unshift(prompt.value.trim());
+      localStorage.setItem('krait-prompts', JSON.stringify(saved.slice(0, 30)));
+      prompt.value = '';
+      $('prompt-menu').classList.add('hidden');
+      toast('Prompt saved');
+    }
+  });
+
+  // keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      $('model-dd-pop').classList.remove('hidden');
+      renderModelDropdown();
+      $('model-dd-search').focus();
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      newChat();
+    } else if (e.key === 'Escape') {
+      closePreview();
+      $('prompt-menu').classList.add('hidden');
+    }
+  });
+
+  // ollama downloader
+  renderOllamaPulls();
+
+  // restore last picked model once the list is filled
+  const lastModel = localStorage.getItem('krait-model');
+  if (lastModel && window.krait) {
+    setTimeout(() => {
+      const sel = $('model-select');
+      for (const o of sel.options) {
+        if (o.value === lastModel) { sel.value = lastModel; K.model = lastModel; break; }
+      }
+      syncModelDD();
+    }, 300);
+  }
+
   // terminal
   $('term-in').addEventListener('keydown', async e => {
     if (e.key !== 'Enter') return;
@@ -209,17 +291,28 @@ async function init() {
     window.krait.onAskPermission(onAskPermission);
     window.krait.onTool(info => {
       if (currentAssistant) {
-        const el = document.createElement('div');
-        el.className = 'tool-activity' + (info.status === 'blocked' ? ' blocked' : '');
-        const icon = info.status === 'done' ? '\u2713' : info.status === 'running' ? '\u2699' : '\u26d4';
-        el.textContent = icon + ' ' + info.name + (info.summary ? ' \u2014 ' + info.summary : '');
-        currentAssistant.querySelector('.bubble').appendChild(el);
+        // Write gets its own collapsible block (like the thoughts bar)
+        if (info.name === 'Write' && info.input && info.input.path && info.status === 'running') {
+          addWriteBlock(info.input.path);
+        } else if (info.name === 'Edit' && info.status === 'done' && info.input && info.input.old_string !== undefined) {
+          addDiffBlock(info.input.path, info.input.old_string, info.input.new_string);
+        } else {
+          const el = document.createElement('div');
+          el.className = 'tool-activity' + (info.status === 'blocked' ? ' blocked' : '');
+          const icon = info.status === 'done' ? '\u2713' : info.status === 'running' ? '\u2699' : '\u26d4';
+          el.textContent = icon + ' ' + info.name + (info.summary ? ' \u2014 ' + info.summary : '');
+          currentAssistant.querySelector('.bubble').appendChild(el);
+        }
       }
       // artifact card for created/edited files
       if (info.name === 'Write' && info.status === 'done' && info.input && info.input.path) {
+        finishWriteBlock(info.input.path);
         addArtifact(currentAssistant, info.input.path);
       }
       scrollDown();
+    });
+    window.krait.onFallback(info => {
+      toast('Provider failed (' + info.from + ') \u2014 retried with ' + info.to);
     });
   }
 
@@ -352,6 +445,32 @@ function appendDelta(d) {
 }
 
 /** Hide raw tool-call JSON from the live view: show a small named chip instead. */
+// XML tool-call tags some models emit (prefix built from char codes)
+const XML_PRE = String.fromCharCode(97, 110, 116, 109, 108, 58);
+const XML_LT = String.fromCharCode(60);
+const XML_RE_OPEN = new RegExp(XML_LT + XML_PRE + 'invoke' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([A-Za-z_][\\w.-]*))?\\s*>', 'g');
+const XML_RE_PARAM = new RegExp(XML_LT + XML_PRE + 'parameter' + '(?:\\s+name\\s*=\\s*"([^"]+)"|\\s+([\\w.]+))?\\s*>', 'g');
+const XML_CLOSE_STR = XML_LT + String.fromCharCode(47) + XML_PRE + 'invoke' + String.fromCharCode(62);
+
+/** Build a short chip label from an XML-style tool call body. */
+function xmlToolChip(body) {
+  const tags = [];
+  XML_RE_PARAM.lastIndex = 0;
+  let a;
+  while ((a = XML_RE_PARAM.exec(body)) !== null) tags.push({ key: a[1] || a[2] || '', i: a.index + a[0].length });
+  let path = '', cmd = '';
+  for (let i = 0; i < tags.length; i++) {
+    const end = i + 1 < tags.length ? tags[i + 1].i : Math.min(body.length, tags[i].i + 400);
+    let v = body.slice(tags[i].i, end).trim();
+    if (v.length > 60) v = v.slice(0, 60);
+    if (['path', 'file_path', 'file', 'filename'].includes(tags[i].key)) path = v;
+    else if (['command', 'cmd'].includes(tags[i].key)) cmd = v;
+  }
+  const arg = path || cmd;
+  if (!arg) return '\u2699 writing code...';
+  const w = path ? (/\.(html?|css|js|py|csv|json|md|txt)$/i.test(path) ? 'Writing ' : 'Working on ') : 'Running ';
+  return '\u2699 ' + w + arg + '...';
+}
 function toolChip(raw) {
   const nm = /"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"/.exec(raw);
   if (!nm) return '\u2699 using tool...';
@@ -367,6 +486,20 @@ function cleanStream(raw) {
   // trailing unclosed tool block (still streaming)
   const idx = s.lastIndexOf('```tool');
   if (idx >= 0) s = s.slice(0, idx) + '\n' + toolChip(s.slice(idx)) + '\n';
+  // XML-style tool calls (complete, and a trailing partial while streaming)
+  {
+    const re = new RegExp(XML_RE_OPEN.source, 'g');
+    const cuts = [];
+    let mm;
+    while ((mm = re.exec(s)) !== null) {
+      const rest = s.slice(mm.index + mm[0].length);
+      const end = rest.indexOf(XML_CLOSE_STR);
+      const stop = end === -1 ? rest.length : end + XML_CLOSE_STR.length;
+      const chip = xmlToolChip(rest.slice(0, end === -1 ? rest.length : end));
+      cuts.push([mm.index, mm.index + mm[0].length + stop, chip]);
+    }
+    for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + '\n' + cuts[i][2] + '\n' + s.slice(cuts[i][1]);
+  }
   // inline tool JSON the model sometimes prints without a fence
   s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, m => toolChip(m));
   s = s.replace(/^\s*tool\s*$/mg, '');
@@ -473,6 +606,18 @@ function resetThought() {
 /** Final answer cleanup: strip tool-call debris and unescape literal \n in code blocks. */
 function sanitizeFinal(text) {
   let s = String(text);
+  {
+    const re = new RegExp(XML_RE_OPEN.source, 'g');
+    const cuts = [];
+    let mm;
+    while ((mm = re.exec(s)) !== null) {
+      const rest = s.slice(mm.index + mm[0].length);
+      const end = rest.indexOf(XML_CLOSE_STR);
+      const stop = end === -1 ? rest.length : end + XML_CLOSE_STR.length;
+      cuts.push([mm.index, mm.index + mm[0].length + stop]);
+    }
+    for (let i = cuts.length - 1; i >= 0; i--) s = s.slice(0, cuts[i][0]) + s.slice(cuts[i][1]);
+  }
   s = s.replace(/```tool\s*\n?[\s\S]*?```/g, '');
   s = s.replace(/\{\s*"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"\s*,[\s\S]*?\}\s*\}(?!\})/g, '');
   s = s.replace(/^\s*tool\s*$/mg, '');
@@ -505,6 +650,14 @@ function addArtifact(bubbleEl, path) {  const name = String(path).split(/[\\/]/)
     const r = await window.krait.openFile(path);
     if (!r.ok) toast('Could not open: ' + (r.error || ''));
   };
+  // in-app preview for web files (and code view for anything else)
+  if (/\.(html?|css|js|py|json|csv|md|txt)$/i.test(name)) {
+    const pv = document.createElement('button');
+    pv.className = 'a-btn';
+    pv.textContent = /\.(html?)$/i.test(name) ? 'Preview' : 'View';
+    pv.onclick = () => openPreview(path);
+    card.insertBefore(pv, dlBtn);
+  }
   const host = bubbleEl || $('messages');
   host.appendChild(card);
   scrollDown();
@@ -516,6 +669,131 @@ function iconFor(name) {
   if (ext === 'csv' || ext === 'xlsx') return '\ud83d\udcca';
   if (['js', 'py', 'ts', 'json'].includes(ext)) return '\ud83d\udcc4';
   return '\ud83d\udcc4';
+}
+
+/* ═══════════ Live write blocks + preview viewer + diffs ═══════════ */
+const writeBlocks = {}; // path -> {el, timer, done}
+
+/** Collapsible "Writing file.html" block, styled like the thoughts bar. */
+function addWriteBlock(p) {
+  if (!currentAssistant) return null;
+  if (writeBlocks[p] && writeBlocks[p].el && document.body.contains(writeBlocks[p].el)) return writeBlocks[p];
+  const el = document.createElement('div');
+  el.className = 'wblk open';
+  el.innerHTML =
+    '<button class="th-head"><span class="th-ic">&#9998;</span><span class="th-label">Writing ' + escHtml(String(p).split(/[\\/]/).pop()) + '</span>' +
+    '<span class="th-time"></span><span class="th-caret">&#9662;</span></button>' +
+    '<div class="th-body"><pre class="w-code"></pre></div>' +
+    '<div class="w-actions"><button class="w-preview">&#9654; Live preview</button></div>';
+  el.querySelector('.th-head').onclick = e => e.currentTarget.closest('.wblk').classList.toggle('open');
+  el.querySelector('.w-preview').onclick = () => openPreview(p);
+  currentAssistant.querySelector('.bubble').appendChild(el);
+  const b = { el, done: false };
+  writeBlocks[p] = b;
+  // poll the real file so you watch it appear
+  b.timer = setInterval(async () => {
+    if (!window.krait || b.done || !document.body.contains(el)) { clearInterval(b.timer); return; }
+    const r = await window.krait.readFile(p);
+    if (r.ok) {
+      const pre = el.querySelector('.w-code');
+      const lines = String(r.content).split('\n');
+      pre.textContent = lines.length > 40 ? '...\n' + lines.slice(-40).join('\n') : r.content;
+      pre.scrollTop = pre.scrollHeight;
+    }
+  }, 600);
+  scrollDown();
+  return b;
+}
+
+/** Mark the block finished (tool done). */
+function finishWriteBlock(p) {
+  const b = writeBlocks[p];
+  if (!b || b.done) return;
+  b.done = true;
+  clearInterval(b.timer);
+  const label = b.el.querySelector('.th-label');
+  if (label) label.textContent = 'Created ' + String(p).split(/[\\/]/).pop();
+  // one last content pull
+  if (window.krait) {
+    window.krait.readFile(p).then(r => {
+      if (!r.ok || !document.body.contains(b.el)) return;
+      const pre = b.el.querySelector('.w-code');
+      const lines = String(r.content).split('\n');
+      pre.textContent = lines.length > 40 ? '...\n' + lines.slice(-40).join('\n') : r.content;
+    }).catch(() => {});
+  }
+}
+
+/** Line diff block for Edit tool calls (red/green like a code review). */
+function addDiffBlock(p, oldStr, newStr) {
+  if (!currentAssistant) return;
+  const el = document.createElement('div');
+  el.className = 'wblk';
+  const name = String(p).split(/[\\/]/).pop();
+  const o = String(oldStr || '').split('\n');
+  const n = String(newStr || '').split('\n');
+  // common prefix / suffix, then mark the middle as -/+ (simple, fast diff)
+  let pre = 0;
+  while (pre < o.length && pre < n.length && o[pre] === n[pre]) pre++;
+  let suf = 0;
+  while (suf < o.length - pre && suf < n.length - pre && o[o.length - 1 - suf] === n[n.length - 1 - suf]) suf++;
+  const rows = [];
+  for (let i = pre; i < o.length - suf; i++) rows.push('<div class="d-rem">- ' + escHtml(o[i] || '') + '</div>');
+  for (let i = pre; i < n.length - suf; i++) rows.push('<div class="d-add">+ ' + escHtml(n[i] || '') + '</div>');
+  const ctx = pre ? '<div class="d-ctx">&#8942;</div>' : '';
+  el.innerHTML =
+    '<button class="th-head"><span class="th-ic">&#128394;</span><span class="th-label">Edited ' + escHtml(name) + '</span>' +
+    '<span class="th-time"></span><span class="th-caret">&#9662;</span></button>' +
+    '<div class="th-body">' + ctx + rows.join('') + '</div>';
+  el.querySelector('.th-head').onclick = e => e.currentTarget.closest('.wblk').classList.toggle('open');
+  currentAssistant.querySelector('.bubble').appendChild(el);
+  scrollDown();
+}
+
+/* ── Preview modal (Rendered / Code, live-refreshing) ── */
+let pvPoll = null;
+let pvPath = null;
+
+function openPreview(p) {
+  const modal = $('preview-modal');
+  pvPath = p;
+  $('pv-title').textContent = String(p).split(/[\\/]/).pop();
+  modal.classList.remove('hidden');
+  setPvTab(true);
+  clearInterval(pvPoll);
+  refreshPreview();
+  pvPoll = setInterval(refreshPreview, 1200); // live: refreshes while the AI writes
+}
+
+function refreshPreview() {
+  if (!pvPath || !window.krait) return;
+  window.krait.readFile(pvPath).then(r => {
+    if (!r.ok) { $('pv-code').textContent = 'Cannot read file: ' + r.error; return; }
+    if ($('pv-tab-code').classList.contains('active')) $('pv-code').textContent = r.content;
+    if (/\.html?$/i.test(pvPath)) {
+      $('pv-frame').style.display = '';
+      $('pv-frame').srcdoc = r.content;
+    } else {
+      $('pv-frame').style.display = 'none';
+      $('pv-tab-render').style.display = 'none';
+    }
+  }).catch(() => {});
+}
+
+function setPvTab(rendered) {
+  $('pv-tab-render').classList.toggle('active', rendered);
+  $('pv-tab-code').classList.toggle('active', !rendered);
+  $('pv-frame').style.display = rendered ? '' : 'none';
+  $('pv-code').style.display = rendered ? 'none' : '';
+  if (!rendered && pvPath && window.krait) {
+    window.krait.readFile(pvPath).then(r => { if (r.ok) $('pv-code').textContent = r.content; }).catch(() => {});
+  }
+}
+
+function closePreview() {
+  $('preview-modal').classList.add('hidden');
+  clearInterval(pvPoll);
+  pvPoll = null;
 }
 
 /* ═══════════ Attachments (paste screenshots) ═══════════ */
@@ -570,10 +848,32 @@ async function send() {
   if (images.length) msg.images = images;
   K.messages.push(msg);
   await ensureSession(text.slice(0, 40));
+  await runTurn();
+}
 
+function updateTokenInfo() {
+  if (K.tokens > 0) $('token-info').textContent = K.tokens.toLocaleString() + ' tok';
+}
+
+/* ═══════════ Regenerate (retry the last message) ═══════════ */
+async function regenerate() {
+  if (K.streaming || !K.messages.length) return;
+  // drop trailing assistant message(s) from the stored convo + UI
+  while (K.messages.length && K.messages[K.messages.length - 1].role === 'assistant') {
+    K.messages.pop();
+  }
+  const box = $('messages');
+  const bots = box.querySelectorAll('.msg.assistant');
+  if (bots.length) bots[bots.length - 1].remove();
+  await runTurn();
+}
+
+/** Shared turn runner used by send() and regenerate(). */
+async function runTurn() {
   K.streaming = true;
   $('btn-send').style.display = 'none';
   $('btn-stop').style.display = '';
+  $('btn-retry').style.display = 'none';
   resetThought();
   currentAssistant = addMsg('assistant', '');
   currentAssistant.querySelector('.text').innerHTML = '<span class="typing">...</span>';
@@ -593,7 +893,10 @@ async function send() {
       setMsgMarkdown(currentAssistant, sanitizeFinal(res.text) || '(empty reply)');
       K.messages.push({ role: 'assistant', content: res.text || '' });
       if (note && res.usage) {
-        note.textContent = '+' + res.usage.total + ' tok' + (res.usage.estimated ? ' (est.)' : '');
+        let n = '+' + res.usage.total + ' tok' + (res.usage.estimated ? ' (est.)' : '');
+        const est = estimateCost(K.model, res.usage);
+        if (est !== null) n += ' \u00b7 ~$' + est.toFixed(4);
+        note.textContent = n;
       }
       if (res.usage) {
         K.tokens += res.usage.total;
@@ -611,12 +914,99 @@ async function send() {
   K.streaming = false;
   $('btn-send').style.display = '';
   $('btn-stop').style.display = 'none';
+  $('btn-retry').style.display = '';
   currentAssistant = null;
   scrollDown();
 }
 
-function updateTokenInfo() {
-  if (K.tokens > 0) $('token-info').textContent = K.tokens.toLocaleString() + ' tok';
+/* ═══════════ Rough cost estimate (paid providers only) ═══════════ */
+const COST_PER_M = {
+  // rough USD per million tokens (in/out) — only paid providers, estimates only
+  anthropic: { in: 3, out: 15 },
+  opencode: { in: 1, out: 3 },
+};
+function estimateCost(modelId, usage) {
+  if (!usage || !modelId) return null;
+  const ns = String(modelId).split('/')[0];
+  const r = COST_PER_M[ns];
+  if (!r) return null; // free / unknown providers cost nothing
+  return ((usage.input || 0) * r.in + (usage.output || 0) * r.out) / 1e6;
+}
+
+/* ═══════════ Prompt library (slash menu) ═══════════ */
+function showPromptMenu() {
+  const menu = $('prompt-menu');
+  const saved = JSON.parse(localStorage.getItem('krait-prompts') || '[]');
+  menu.innerHTML = '';
+  const save = document.createElement('button');
+  save.className = 'pm-save'; save.id = 'pm-save-prompt';
+  save.textContent = '\u2795 Save current prompt';
+  menu.appendChild(save);
+  for (const t of saved.slice(0, 12)) {
+    const it = document.createElement('button');
+    it.className = 'pm-prompt';
+    it.dataset.text = t;
+    it.textContent = t.length > 60 ? t.slice(0, 59) + '\u2026' : t;
+    menu.appendChild(it);
+  }
+  menu.classList.remove('hidden');
+}
+
+/* ═══════════ Export chat as Markdown ═══════════ */
+async function exportChat() {
+  if (!K.messages.length) { toast('Nothing to export yet'); return; }
+  let md = '# krait chat \u2014 ' + new Date().toLocaleString() + '\n\n';
+  md += '_Model: ' + (K.model || 'none') + '_\n\n';
+  for (const m of K.messages) {
+    md += m.role === 'user' ? '## You\n\n' : '## krait\n\n';
+    md += (m.content || '') + '\n\n';
+  }
+  if (!window.krait) { toast('Export only works in the app'); return; }
+  const r = await window.krait.saveText('krait-chat', md);
+  if (r.ok) toast('Chat exported: ' + r.savedTo);
+  else if (r.error !== 'cancelled') toast('Export failed: ' + r.error);
+}
+
+/* ═══════════ Ollama model downloader ═══════════ */
+const OLLAMA_POPULAR = ['qwen3:4b', 'llama3.2:3b', 'gemma3:4b', 'deepseek-r1:8b', 'qwen2.5-coder:7b', 'phi4-mini'];
+async function renderOllamaPulls() {
+  const box = $('ollama-pulls');
+  const hint = $('ollama-hint');
+  if (!box || !window.krait) return;
+  const st = await window.krait.ollamaStatus();
+  if (!st.installed) {
+    hint.innerHTML = 'Ollama is not running. Install it from <a href="https://ollama.com/download" target="_blank">ollama.com/download</a>, then models pulled here run 100% locally in krait (free, private, no key).';
+    box.innerHTML = '';
+    return;
+  }
+  const have = st.models || [];
+  hint.innerHTML = 'Ollama is running with <b>' + have.length + '</b> local model(s). Pull more below \u2014 they appear in the model menu under <b>Ollama (local, free)</b>.';
+  box.innerHTML = '';
+  for (const m of OLLAMA_POPULAR) {
+    const installed = have.some(x => x === m || x.startsWith(m + ':'));
+    const row = document.createElement('div');
+    row.className = 'oll-row';
+    row.innerHTML = '<span class="oll-name">' + m + '</span>';
+    const btn = document.createElement('button');
+    btn.className = 'conn-btn' + (installed ? '' : ' on');
+    btn.textContent = installed ? '\u2713 have it' : 'Pull';
+    if (installed) btn.disabled = true;
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = 'pulling... (can take minutes)';
+      const r = await window.krait.ollamaPull(m);
+      if (r.ok) {
+        btn.textContent = '\u2713 have it';
+        toast('Pulled ' + m + ' \u2014 refresh model lists to see it');
+        const rb = $('models-refresh');
+        if (rb) rb.click();
+      } else {
+        btn.textContent = 'failed, retry';
+        btn.disabled = false;
+      }
+    };
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
 }
 
 /* ═══════════ Plugins / Skills for the AI ═══════════ */
@@ -1197,6 +1587,8 @@ async function fillModelSelect(keys) {
     sel.appendChild(o);
     sel.disabled = true;
     K.model = '';
+    K.modelList = [];
+    renderModelDropdown();
     return;
   }
 
@@ -1210,7 +1602,23 @@ async function fillModelSelect(keys) {
     }
     K.model = sel.value;
     K.vision = sel.options[sel.selectedIndex].dataset.vision === '1';
+    syncModelDD();
   };
+
+  // build the flat list the custom dropdown reads
+  K.modelList = [];
+  for (const [ns, models] of cat) {
+    if (ns !== 'ollama' && !keys[ns]) continue;
+    if (ns === 'ollama' && !(liveData.ollama && liveData.ollama.length)) continue;
+    for (const m of models) K.modelList.push({ ns, id: m.id, name: m.name, vision: !!m.vision, live: !!liveData[ns] });
+  }
+  for (const [id, cfg] of customs) {
+    if (!keys[id]) continue;
+    for (const m of ((cfg.models && cfg.models.length) ? cfg.models : [])) {
+      K.modelList.push({ ns: id, id: m, name: m, vision: false, live: false, customName: cfg.name });
+    }
+  }
+  renderModelDropdown();
 }
 
 /** When images are attached, make sure the selected model can see. */
@@ -1223,7 +1631,113 @@ function ensureVisionModel() {
     K.model = v.value;
     K.vision = true;
     addNotice('Switched to <b>' + v.textContent + '</b> so krait can see your image.');
+    syncModelDD();
   }
+}
+
+/* ═══════════ Model dropdown (favorites + search + profiles) ═══════════ */
+function favList() { try { return JSON.parse(localStorage.getItem('krait-favs') || '[]'); } catch { return []; } }
+function toggleFav(full) {
+  const f = favList();
+  const i = f.indexOf(full);
+  if (i >= 0) f.splice(i, 1); else f.push(full);
+  localStorage.setItem('krait-favs', JSON.stringify(f));
+  renderModelDropdown();
+}
+function shortModel(full) {
+  const parts = full.split('/');
+  let n = parts.slice(1).join('/');
+  n = n.replace(/^(meta-llama|deepseek-ai|mistralai|openai|nvidia|google|qwen|inclusionai|baidu|cohere|openrouter)\//, '');
+  return n.length > 34 ? n.slice(0, 33) + '…' : n;
+}
+function renderModelDropdown() {
+  const list = $('model-dd-list');
+  if (!list) return;
+  const q = ($('model-dd-search').value || '').toLowerCase();
+  const PROVIDER_LABEL = {
+    openrouter: 'OpenRouter (free)', nvidia: 'NVIDIA', gemini: 'Gemini', groq: 'Groq',
+    cerebras: 'Cerebras', mistral: 'Mistral', huggingface: 'HuggingFace', github: 'GitHub Models',
+    opencode: 'OpenCode Zen', anthropic: 'Anthropic', ollama: 'Ollama (local, free)',
+  };
+  const favs = favList();
+  const items = (K.modelList || []).filter(m => {
+    if (!q) return true;
+    return (m.ns + ' ' + m.id + ' ' + m.name).toLowerCase().includes(q);
+  });
+  const favItems = items.filter(m => favs.includes(m.ns + '/' + m.id));
+  const rest = items.filter(m => !favs.includes(m.ns + '/' + m.id));
+  list.innerHTML = '';
+  const addRow = m => {
+    const full = m.ns + '/' + m.id;
+    const row = document.createElement('div');
+    row.className = 'dd-row' + (full === K.model ? ' active' : '');
+    const star = document.createElement('span');
+    star.className = 'dd-star' + (favs.includes(full) ? ' on' : '');
+    star.textContent = favs.includes(full) ? '★' : '☆';
+    star.title = 'Favorite';
+    star.onclick = e => { e.stopPropagation(); toggleFav(full); };
+    const name = document.createElement('span');
+    name.className = 'dd-name';
+    name.textContent = shortModel(full) + (m.vision && !/vision/i.test(m.name) ? ' (vision)' : '');
+    const prov = document.createElement('span');
+    prov.className = 'dd-prov';
+    prov.textContent = (m.customName || PROVIDER_LABEL[m.ns] || m.ns);
+    row.appendChild(star); row.appendChild(name); row.appendChild(prov);
+    row.onclick = () => pickModel(full, m.vision);
+    list.appendChild(row);
+  };
+  if (favItems.length) {
+    const h = document.createElement('div');
+    h.className = 'dd-group'; h.textContent = '★ Favorites';
+    list.appendChild(h);
+    favItems.forEach(addRow);
+  }
+  if (favItems.length && rest.length) {
+    const h = document.createElement('div');
+    h.className = 'dd-group'; h.textContent = 'All models';
+    list.appendChild(h);
+  }
+  rest.forEach(addRow);
+  if (!items.length) list.innerHTML = '<div class="dd-empty">No models match.</div>';
+}
+
+function pickModel(full, vision) {
+  const sel = $('model-select');
+  const notice = K.model && K.model !== full;
+  K.model = full;
+  K.vision = !!vision;
+  // keep the hidden native select in sync (it is the source of truth for values)
+  for (const o of sel.options) { if (o.value === full) { sel.value = full; break; } }
+  localStorage.setItem('krait-model', full);
+  $('model-dd-pop').classList.add('hidden');
+  $('model-dd-btn').innerHTML = '&#9679; ' + escHtml(shortModel(full));
+  if (notice) addNotice('Switched model: <b>' + escHtml(shortModel(full)) + '</b>');
+}
+
+function syncModelDD() {
+  if (K.model) $('model-dd-btn').innerHTML = '&#9679; ' + escHtml(shortModel(K.model));
+  renderModelDropdown();
+}
+
+/** One-click profiles: pick the best available model for the job. */
+function pickProfile(kind) {
+  const L = K.modelList || [];
+  const have = ns => L.filter(m => m.ns === ns);
+  let pick = null;
+  if (kind === 'fast') {
+    pick = have('cerebras')[0] || have('groq')[0] ||
+      L.find(m => /flash|8b|mini|nano|small/i.test(m.id) && m.ns !== 'ollama') || have('ollama')[0];
+  } else if (kind === 'smart') {
+    pick = L.find(m => /nemotron-3-ultra|deepseek-v4|qwen3-32b|gpt-oss-120b|70b|sonnet|opus/i.test(m.id) && m.ns !== 'ollama') ||
+      L.find(m => /ultra|72b|120b|large/i.test(m.id)) || L.find(m => m.ns !== 'ollama');
+  } else if (kind === 'vision') {
+    pick = L.find(m => m.vision && m.ns === 'openrouter') || L.find(m => m.vision && m.ns !== 'ollama') || L.find(m => m.vision);
+  } else if (kind === 'local') {
+    pick = have('ollama')[0];
+  }
+  if (!pick) { toast('No model available for that profile — add a key or install Ollama'); return; }
+  pickModel(pick.ns + '/' + pick.id, pick.vision);
+  toast('Profile: ' + kind + ' → ' + shortModel(pick.ns + '/' + pick.id));
 }
 
 /* ═══════════ Terminal / Toast ═══════════ */

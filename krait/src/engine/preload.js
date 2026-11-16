@@ -41,6 +41,13 @@ contextBridge.exposeInMainWorld('krait', {
   modelsGet: () => ipcRenderer.invoke('krait:models-get'),
   modelsRefresh: () => ipcRenderer.invoke('krait:models-refresh'),
 
+  readFile: p => ipcRenderer.invoke('krait:read-file', p),
+  saveText: (title, content) => ipcRenderer.invoke('krait:save-text', { title, content }),
+  ollamaStatus: () => ipcRenderer.invoke('krait:ollama-status'),
+  ollamaPull: model => ipcRenderer.invoke('krait:ollama-pull', model),
+
+  onFallback: cb => ipcRenderer.on('krait:fallback', (_, info) => cb(info)),
+
   onAskPermission: cb => ipcRenderer.on('krait:ask-permission', (_, req) => cb(req)),
   permissionResponse: (id, choice) => ipcRenderer.invoke('krait:permission-response', id, choice),
 

@@ -47,7 +47,20 @@
 
     <div id="composer">
       <div class="chips">
-        <select id="model-select" title="Model"></select>
+        <div id="model-dd" style="position:relative">
+          <button id="model-dd-btn" class="chip-btn" title="Pick model (Ctrl+K)">&#9679; Model</button>
+          <div id="model-dd-pop" class="hidden">
+            <div class="dd-profiles">
+              <button data-prof="fast">&#9889; Fast</button>
+              <button data-prof="smart">&#129504; Smart</button>
+              <button data-prof="vision">&#128065; Vision</button>
+              <button data-prof="local">&#128421; Local</button>
+            </div>
+            <input id="model-dd-search" placeholder="Search models..." spellcheck="false">
+            <div id="model-dd-list"></div>
+          </div>
+        </div>
+        <select id="model-select" title="Model" style="display:none"></select>
         <select id="mode-select" title="Mode">
           <option value="normal">Normal</option>
           <option value="plan">Plan</option>
@@ -62,8 +75,11 @@
           <option value="ultra">Ultracode</option>
         </select>
         <span class="spacer"></span>
+        <button id="btn-retry" class="chip-btn" title="Regenerate last reply" style="display:none">&#8635; Retry</button>
+        <button id="btn-export" class="chip-btn" title="Export chat as Markdown">&#8681;</button>
         <span id="token-info" title="Tokens used this chat">0 tok</span>
       </div>
+      <div id="prompt-menu" class="hidden"></div>
       <div class="row">
         <button id="btn-attach" class="attach-btn" title="Attach images or files (+)">&#43;</button>
         <textarea id="prompt" rows="1" placeholder="How can I help you today?"></textarea>
@@ -84,12 +100,13 @@
 <div id="profile-menu" class="hidden">
   <button class="pm-item" id="pm-settings">&#9881; Settings</button>
   <button class="pm-item" id="pm-projects">&#128193; Projects</button>
+  <button class="pm-item" id="pm-export">&#8681; Export chat</button>
   <button class="pm-item" id="pm-plugins">&#129518; Plugins</button>
   <button class="pm-item" id="pm-skills">&#127919; Skills</button>
   <button class="pm-item" id="pm-connectors">&#128268; Connectors</button>
   <button class="pm-item" id="pm-mcp">&#127760; MCP servers</button>
   <div class="pm-sep"></div>
-  <div class="pm-about">krait v1.3.0 &middot; by Avepier</div>
+  <div class="pm-about">krait v1.4.0 &middot; by Avepier</div>
 </div>
 
 <!-- projects modal -->
@@ -128,7 +145,7 @@
       <button class="set-nav" data-page="skills">&#127919; Skills</button>
       <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
       <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
-      <div class="set-side-foot">krait v1.3.0 &middot; by Avepier</div>
+      <div class="set-side-foot">krait v1.4.0 &middot; by Avepier</div>
     </aside>
     <div class="set-main">
       <div class="set-page" id="page-account">
@@ -191,7 +208,8 @@
         <p class="key-sub" style="margin-top:8px">Pulls every free/live model straight from your providers (OpenRouter free models, all of NVIDIA, Groq, Cerebras, Mistral, HuggingFace, GitHub, OpenCode Zen, and any local Ollama models).</p>
 
         <h3 style="margin-top:18px">Local AI with Ollama (free, runs on your PC)</h3>
-        <p class="key-sub">Install <a href="https://ollama.com/download" target="_blank">Ollama</a>, run e.g. <code>ollama pull qwen3:8b</code>, then click Refresh above — your local models show up in the model menu as <b>Ollama (local, free)</b>. No key needed.</p>
+        <p class="key-sub" id="ollama-hint">Checking Ollama...</p>
+        <div id="ollama-pulls" class="ollama-pulls"></div>
 
         <h3 style="margin-top:22px">Your own provider</h3>
         <p class="key-sub">Have any OpenAI-compatible API (a router, a local server, anything)? Give it your own name and it shows up in the model picker.</p>
@@ -254,6 +272,24 @@
       </div>
     </div>
     <button id="key-close" class="key-close" title="Close">&#10005;</button>
+  </div>
+</div>
+
+<!-- live preview / diff viewer modal -->
+<div id="preview-modal" class="hidden">
+  <div class="pv-box">
+    <div class="pv-head">
+      <div class="pv-title" id="pv-title">file.html</div>
+      <div class="pv-tabs">
+        <button id="pv-tab-render" class="pv-tab active">Rendered</button>
+        <button id="pv-tab-code" class="pv-tab">Code</button>
+      </div>
+      <button id="pv-close" class="pv-close">&#10005;</button>
+    </div>
+    <div class="pv-body">
+      <iframe id="pv-frame" sandbox="allow-scripts"></iframe>
+      <pre id="pv-code" style="display:none"></pre>
+    </div>
   </div>
 </div>
 
