@@ -20,7 +20,8 @@ const path = require('path');
 const TOOL_BLOCK_RE = /```tool\s*\n?([\s\S]*?)```/g;
 const MAX_ROUNDS = 6;
 
-const KNOWN_TOOLS = new Set(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebFetch']);
+const KNOWN_TOOLS = new Set(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebFetch', 'Ask']);
+const READ_ONLY = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Ask']);
 // XML-style tool calls some models emit instead of the fenced block
 const __PRE = String.fromCharCode(97, 110, 116, 109, 108, 58);
 const __LT = String.fromCharCode(60);
@@ -83,7 +84,8 @@ function parseXmlToolBlocks(text) {
     const keys = Object.keys(args);
     let name = KNOWN_TOOLS.has(rawName) ? rawName : null;
     if (!name) {
-      if (keys.includes('command')) name = 'Bash';
+      if (keys.includes('question')) name = 'Ask';
+      else if (keys.includes('command')) name = 'Bash';
       else if (keys.includes('old_string') || keys.includes('new_string')) name = 'Edit';
       else if (keys.includes('url')) name = 'WebFetch';
       else if (keys.includes('pattern')) name = keys.includes('path') ? 'Grep' : 'Glob';
@@ -97,7 +99,7 @@ function parseXmlToolBlocks(text) {
         : (k === 'file_text' || k === 'new_content') ? 'content' : k;
       input[kk] = (kk === 'content') ? String(v).replace(/[\s ]+$/, '') : String(v).replace(/\s+$/, '');
     }
-    if (input.path || input.command || input.url || input.pattern) calls.push({ name, input });
+    if (input.path || input.command || input.url || input.pattern || input.question) calls.push({ name, input });
   }
   return calls;
 }
@@ -178,7 +180,9 @@ function toolPrompt(enabled) {
     s += '- ' + t.name + ': ' + t.description + '. Args: ' +
       JSON.stringify(t.input_schema.properties || {}) + '\n';
   }
-  s += 'Paths are relative to the project root. After using tools, give the user a short, clear answer and mention they can download created files from the card in the chat.';
+  s += '- Ask: show the user a question in the chat and WAIT for their typed answer. Args: {"question": "your question"}\n';
+  s += 'RULES for Ask: if you are missing information you genuinely need (a choice between options, a name, a path, a preference), use Ask instead of guessing. Keep the question short. Do not overuse it.';
+  s += '\nPaths are relative to the project root. After using tools, give the user a short, clear answer and mention they can download created files from the card in the chat.';
   return s;
 }
 
@@ -198,7 +202,7 @@ function parseToolBlocks(text) {
   // Fallback: models often write the tool call as bare JSON without the fence,
   // e.g. {"name": "Write", "input": {"path": "...", "content": "..."}}
   // Scan with brace matching so nested {} in content don't break it.
-  const NAMES = 'Read|Write|Edit|Bash|Glob|Grep|WebFetch';
+  const NAMES = 'Read|Write|Edit|Bash|Glob|Grep|WebFetch|Ask';
   const startRe = new RegExp('\\{\\s*"name"\\s*:\\s*"(' + NAMES + ')"', 'g');
   let s;
   while ((s = startRe.exec(text)) !== null) {
@@ -284,7 +288,7 @@ function summarize(out) {
  * Returns { text, usage } where text is the final clean answer.
  */
 async function runAgent(deps) {
-  const { modelId, messages, opts, signal, sendDelta, sendTool, askPermission, streamChat } = deps;
+  const { modelId, messages, opts, signal, sendDelta, sendTool, askPermission, askUser, streamChat } = deps;
   const mode = (opts && opts.mode) || 'normal';
   const enabled = (opts && opts.enabledTools) || [];
   const baseDir = (opts && opts.projectDir) || '.';
@@ -306,6 +310,7 @@ async function runAgent(deps) {
     usage.input += u.input || 0;
     usage.output += u.output || 0;
     usage.total += u.total || 0;
+    usage.last = u;
   };
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -340,7 +345,7 @@ async function runAgent(deps) {
       let allowed = true;
       let denyReason = '';
 
-      if (!enabled.includes(call.name)) {
+      if (!enabled.includes(call.name) && call.name !== 'Ask') {
         allowed = false;
         denyReason = 'tool is disabled in Plugins';
       } else if (mode === 'plan' && !READ_ONLY.has(call.name)) {
@@ -360,6 +365,19 @@ async function runAgent(deps) {
         continue;
       }
 
+      if (call.name === 'Ask') {
+        // ask the user a question in the chat and wait for the answer
+        const q = String((call.input && (call.input.question || call.input.text || call.input.q)) || '');
+        if (sendTool) sendTool({ name: 'Ask', input: call.input, status: 'running', summary: q.slice(0, 80) });
+        let ans = '(no answer)';
+        try {
+          ans = askUser ? await askUser({ question: q, options: call.input && call.input.options || null }) : '(no answer)';
+        } catch { ans = '(no answer)'; }
+        if (sendTool) sendTool({ name: 'Ask', input: call.input, status: 'done', summary: 'user answered' });
+        results.push('You asked the user: ' + q + '\nThe user answered: ' + ans +
+          '\nUse this answer to continue. Ask again only if something is still unclear.');
+        continue;
+      }
       if (sendTool) sendTool({ name: call.name, input: call.input, status: 'running' });
       const out = await toolset.execute(call.name, call.input);
       if (call.name === 'Write') usedWrite = true;

@@ -147,7 +147,9 @@ function activeProjectDir() {
 }
 
 function createWindow() {
-  const icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'icon.png'));
+  let icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'krait.ico'));
+  if (icon.isEmpty()) icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'logo-trim.png'));
+  if (icon.isEmpty()) icon = nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'icon.png'));
 
   win = new BrowserWindow({
     width: 1280,
@@ -207,6 +209,7 @@ ipcMain.handle('krait:chat', async (event, modelId, messages, opts) => {
           if (!event.sender.isDestroyed()) event.sender.send('krait:tool', info);
         },
         askPermission: req => askViaDialog(req),
+        askUser: q => askViaChat(event.sender, q.question, q.options),
         streamChat,
       });
     } else {
@@ -457,6 +460,26 @@ ipcMain.handle('krait:git-diff', () => {
     });
   });
 });
+
+// ─── Ask-the-user bridge (the AI asks a question in the chat) ───
+const pendingAsks = new Map();
+let askSeq = 0;
+ipcMain.on('krait:answer', (event, payload) => {
+  const { id, text } = payload || {};
+  const r = pendingAsks.get(id);
+  if (r) { pendingAsks.delete(id); r(String(text || '')); }
+});
+function askViaChat(sender, question, options) {
+  return new Promise(resolve => {
+    if (!sender || sender.isDestroyed()) { resolve('(user is away)'); return; }
+    const id = 'ask-' + (++askSeq);
+    const t = setTimeout(() => {
+      if (pendingAsks.has(id)) { pendingAsks.delete(id); resolve('(no answer - timed out)'); }
+    }, 5 * 60 * 1000);
+    pendingAsks.set(id, v => { clearTimeout(t); resolve(v || '(no answer)'); });
+    sender.send('krait:ask', { id, question, options: options || null });
+  });
+}
 
 ipcMain.handle('krait:abort', () => {
   if (currentAbort) currentAbort.abort();

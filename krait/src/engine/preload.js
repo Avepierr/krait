@@ -47,6 +47,8 @@ contextBridge.exposeInMainWorld('krait', {
   ollamaPull: model => ipcRenderer.invoke('krait:ollama-pull', model),
 
   onFallback: cb => ipcRenderer.on('krait:fallback', (_, info) => cb(info)),
+  onAsk: cb => ipcRenderer.on('krait:ask', (_, q) => cb(q)),
+  answer: (id, text) => ipcRenderer.send('krait:answer', { id, text }),
 
   onAskPermission: cb => ipcRenderer.on('krait:ask-permission', (_, req) => cb(req)),
   permissionResponse: (id, choice) => ipcRenderer.invoke('krait:permission-response', id, choice),

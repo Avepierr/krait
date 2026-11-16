@@ -2,7 +2,7 @@
 /* krait renderer — chat, markdown, tokens, sessions, projects, settings, MCP, artifacts. */
 
 const $ = id => document.getElementById(id);
-const K = { model: '', messages: [], streaming: false, sessionId: null, tokens: 0, memory: null, attachments: [] };
+const K = { model: '', messages: [], streaming: false, sessionId: null, tokens: 0, memory: null, attachments: [], queue: [] };
 let currentAssistant = null;
 
 const SNAKE =
@@ -291,25 +291,116 @@ async function init() {
     window.krait.onAskPermission(onAskPermission);
     window.krait.onTool(info => {
       if (currentAssistant) {
-        // Write gets its own collapsible block (like the thoughts bar)
-        if (info.name === 'Write' && info.input && info.input.path && info.status === 'running') {
-          addWriteBlock(info.input.path);
-        } else if (info.name === 'Edit' && info.status === 'done' && info.input && info.input.old_string !== undefined) {
-          addDiffBlock(info.input.path, info.input.old_string, info.input.new_string);
+        const bubble = currentAssistant.querySelector('.bubble');
+        // group consecutive tool events into one collapsible "Used N Edit, Shell" block
+        if (!bubble.contains(tgroupEl)) {
+          tgroupEl = document.createElement('div');
+          tgroupEl.className = 'tgroup open';
+          tgroupEl.innerHTML = '<button class="tg-head"><span class="tg-label">Working\u2026</span><span class="tg-caret">\u25be</span></button><div class="tg-body"></div>';
+          tgroupEl.querySelector('.tg-head').onclick = e => e.currentTarget.closest('.tgroup').classList.toggle('open');
+          tgroupRunning = 0;
+          for (const k of Object.keys(pendingRows)) delete pendingRows[k];
+          bubble.appendChild(tgroupEl);
+        }
+        const body = tgroupEl.querySelector('.tg-body');
+        if (info.status === 'running') {
+          const row = document.createElement('div');
+          row.className = 'tg-row';
+          row.dataset.tool = info.name;
+          if (info.name === 'Ask') {
+            row.innerHTML = '<span class="tg-ic run">\u2753</span><span class="tg-name">Asking you: ' +
+              escHtml(String((info.input && info.input.question) || '').slice(0, 70)) + '</span>';
+          } else {
+            let html = '<span class="tg-ic run">\u2699</span><span class="tg-name">' + escHtml(toolRowLabel(info)) + '</span>';
+            if (info.name === 'Edit' && info.input && info.input.path) {
+              const add = String(info.input.new_string || '').split('\n').length;
+              const rem = String(info.input.old_string || '').split('\n').length;
+              html += '<span class="tg-badge add">+' + add + '</span><span class="tg-badge rem">\u2212' + rem + '</span>';
+            }
+            if (info.name === 'Write' && info.input) {
+              const c = String(info.input.content || '');
+              if (c) html += '<span class="tg-badge add">+' + c.split('\n').length + '</span>';
+            }
+            row.innerHTML = html;
+          }
+          if (info.name === 'Write' && info.input && info.input.path) {
+            row.title = 'Click to preview ' + info.input.path;
+            row.style.cursor = 'pointer';
+            row.onclick = () => openPreview(info.input.path);
+          }
+          if (info.name === 'Bash' && info.input && info.input.command) row.title = info.input.command;
+          body.appendChild(row);
+          pendingRows[info.name] = row;
+          tgroupRunning++;
+          tgUpdateHead(tgroupEl, true);
         } else {
-          const el = document.createElement('div');
-          el.className = 'tool-activity' + (info.status === 'blocked' ? ' blocked' : '');
-          const icon = info.status === 'done' ? '\u2713' : info.status === 'running' ? '\u2699' : '\u26d4';
-          el.textContent = icon + ' ' + info.name + (info.summary ? ' \u2014 ' + info.summary : '');
-          currentAssistant.querySelector('.bubble').appendChild(el);
+          const row = pendingRows[info.name];
+          if (row) {
+            delete pendingRows[info.name];
+            tgroupRunning = Math.max(0, tgroupRunning - 1);
+            const ic = row.querySelector('.tg-ic');
+            if (ic) {
+              ic.classList.remove('run');
+              ic.classList.add(info.status === 'blocked' ? 'blk' : 'ok');
+              ic.textContent = info.status === 'blocked' ? '\u26d4' : '\u2713';
+            }
+            if (info.status === 'blocked') row.classList.add('tg-blocked');
+          }
+          if (tgroupRunning === 0) {
+            tgUpdateHead(tgroupEl, false);
+            tgroupEl.classList.remove('open'); // collapse when finished, click to expand
+          }
+        }
+        // Write also gets the live code block + artifact; Edit gets the red/green diff
+        if (info.name === 'Write' && info.input && info.input.path && info.status === 'running') addWriteBlock(info.input.path);
+        if (info.name === 'Edit' && info.status === 'done' && info.input && info.input.old_string !== undefined) {
+          addDiffBlock(info.input.path, info.input.old_string, info.input.new_string);
+        }
+        if (info.name === 'Write' && info.status === 'done' && info.input && info.input.path) {
+          finishWriteBlock(info.input.path);
+          addArtifact(currentAssistant, info.input.path);
         }
       }
-      // artifact card for created/edited files
-      if (info.name === 'Write' && info.status === 'done' && info.input && info.input.path) {
-        finishWriteBlock(info.input.path);
-        addArtifact(currentAssistant, info.input.path);
-      }
       scrollDown();
+    });
+    window.krait.onAsk(({ id, question, options }) => {
+      const card = document.createElement('div');
+      card.className = 'ask-card';
+      card.innerHTML = '<div class="ask-q">\u2753 ' + escHtml(question || 'The AI has a question') + '</div>';
+      const orow = document.createElement('div');
+      orow.className = 'ask-opts';
+      if (Array.isArray(options)) for (const o of options) {
+        const b = document.createElement('button');
+        b.className = 'ask-opt'; b.textContent = o;
+        b.onclick = () => finish(String(o));
+        orow.appendChild(b);
+      }
+      const row = document.createElement('div');
+      row.className = 'ask-row';
+      const input = document.createElement('input');
+      input.className = 'ask-in'; input.placeholder = 'Type your answer\u2026';
+      const btn = document.createElement('button');
+      btn.className = 'ask-btn'; btn.textContent = 'Answer';
+      row.appendChild(input); row.appendChild(btn);
+      const finish = val => {
+        if (card.classList.contains('answered')) return;
+        if (!val) { input.focus(); return; }
+        card.classList.add('answered');
+        input.disabled = true; btn.disabled = true;
+        orow.querySelectorAll('.ask-opt').forEach(b => b.disabled = true);
+        window.krait.answer(id, val);
+        const note = document.createElement('div');
+        note.className = 'ask-note'; note.textContent = 'You answered: ' + val;
+        card.appendChild(note);
+      };
+      btn.onclick = () => finish(input.value.trim());
+      input.onkeydown = e => { if (e.key === 'Enter') finish(input.value.trim()); };
+      card.appendChild(orow);
+      card.appendChild(row);
+      const bubble = currentAssistant && currentAssistant.querySelector('.bubble');
+      (bubble || $('messages')).appendChild(card);
+      scrollDown();
+      input.focus();
     });
     window.krait.onFallback(info => {
       toast('Provider failed (' + info.from + ') \u2014 retried with ' + info.to);
@@ -549,9 +640,9 @@ function xmlToolChip(body) {
   return '\u2699 ' + w + arg + '...';
 }
 function toolChip(raw) {
-  const nm = /"name"\s*:\s*"(Read|Write|Edit|Bash|Glob|Grep|WebFetch)"/.exec(raw);
+  const nm = /"name"\s*:\s*"(\w+)"/.exec(raw);
   if (!nm) return '\u2699 using tool...';
-  const what = { Read: 'Reading', Write: 'Writing', Edit: 'Editing', Bash: 'Running', Glob: 'Scanning', Grep: 'Searching', WebFetch: 'Fetching' }[nm[1]];
+  const what = { Read: 'Reading', Write: 'Writing', Edit: 'Editing', Bash: 'Running', Glob: 'Scanning', Grep: 'Searching', WebFetch: 'Fetching', Ask: 'Asking' }[nm[1]] || 'Using';
   const p = /"path"\s*:\s*"([^"]{1,60})"/.exec(raw) || /"command"\s*:\s*"([^"]{1,60})"/.exec(raw);
   return '\u2699 ' + what + (p ? ' ' + p[1] : '') + '...';
 }
@@ -750,6 +841,27 @@ function iconFor(name) {
 
 /* ═══════════ Live write blocks + preview viewer + diffs ═══════════ */
 const writeBlocks = {}; // path -> {el, timer, done}
+let tgroupEl = null;      // current "Using/Used N Tool" collapsible
+let tgroupRunning = 0;    // rows still running in it
+const pendingRows = {};   // tool name -> row awaiting its done event
+function resetToolGroup() { tgroupEl = null; tgroupRunning = 0; for (const k of Object.keys(pendingRows)) delete pendingRows[k]; }
+
+/** Short label for a tool row ("make-ico.js", "Shell npm test", "Find *.js"). */
+function toolRowLabel(info) {
+  const i = info.input || {};
+  const base = k => String(k || '').split(/[\\/]/).pop();
+  switch (info.name) {
+    case 'Write': return base(i.path) || 'Write';
+    case 'Edit': return base(i.path) || 'Edit';
+    case 'Bash': return 'Shell ' + String(i.command || '').slice(0, 60);
+    case 'Read': return 'Read ' + (base(i.path) || i.path || '');
+    case 'Glob': return 'Find ' + (i.pattern || '');
+    case 'Grep': return 'Search ' + (i.pattern || '');
+    case 'WebFetch': return 'Fetch ' + String(i.url || '').slice(0, 50);
+    case 'Ask': return 'Question';
+    default: return info.name;
+  }
+}
 
 /** Collapsible "Writing file.html" block, styled like the thoughts bar. */
 function addWriteBlock(p) {
@@ -903,23 +1015,31 @@ function renderAttachments() {
 
 /* ═══════════ Send ═══════════ */
 async function send() {
-  if (K.streaming) return;
   const prompt = $('prompt');
   const text = prompt.value.trim();
   const images = K.attachments.map(a => a.url);
   if (!text && !images.length) return;
-
   if (!K.model) {
     addMsg('assistant', 'No model yet. Click the gear in the title bar, add an API key, then pick a model.');
     return;
   }
-  if (images.length) ensureVisionModel();
-
   prompt.value = '';
   prompt.style.height = 'auto';
   K.attachments = [];
   renderAttachments();
 
+  if (K.streaming) {
+    // queue it - sends automatically when the current reply finishes
+    K.queue.push({ text, images });
+    renderQueue();
+    toast('Queued - sends when the current reply finishes (or press Send now)');
+    return;
+  }
+  await startUserTurn(text, images);
+}
+
+/** One queued/typed user message = add to chat + run a turn. */
+async function startUserTurn(text, images) {
   addMsg('user', text, images);
   const msg = { role: 'user', content: text || 'Describe this image.' };
   if (images.length) msg.images = images;
@@ -928,8 +1048,38 @@ async function send() {
   await runTurn();
 }
 
+/** Queue chips above the composer (visible while the AI is working). */
+function renderQueue() {
+  const row = $('queue-row');
+  if (!row) return;
+  row.innerHTML = '';
+  if (!K.queue.length) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  K.queue.forEach((q, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'q-chip';
+    chip.title = q.text || '';
+    chip.textContent = (q.text || '(image)').slice(0, 44);
+    const x = document.createElement('span');
+    x.className = 'q-x'; x.textContent = '\u00d7'; x.title = 'Remove from queue';
+    x.onclick = () => { K.queue.splice(i, 1); renderQueue(); };
+    chip.appendChild(x);
+    row.appendChild(chip);
+  });
+  const now = document.createElement('button');
+  now.className = 'q-now';
+  now.textContent = 'Send now \u25b6';
+  now.title = 'Stop the current reply and send the queued message right away';
+  now.onclick = () => { if (window.krait) window.krait.abortChat(); };
+  row.appendChild(now);
+}
+
 function updateTokenInfo() {
-  if (K.tokens > 0) $('token-info').textContent = K.tokens.toLocaleString() + ' tok';
+  const el = $('token-info');
+  if (K.tokens > 0) {
+    el.textContent = K.tokens.toLocaleString() + ' tok';
+    el.title = 'Reply tokens used in this chat (prompt tokens excluded - matches your provider dashboard)';
+  }
 }
 
 /* ═══════════ Regenerate (retry the last message) ═══════════ */
@@ -948,12 +1098,15 @@ async function regenerate() {
 /** Shared turn runner used by send() and regenerate(). */
 async function runTurn() {
   K.streaming = true;
+  resetToolGroup();
+  const session0 = K.sessionId;   // the chat this turn belongs to (even if the user switches away)
+  const bubble = addMsg('assistant', '');
+  currentAssistant = bubble;
   $('btn-send').style.display = 'none';
   $('btn-stop').style.display = '';
   $('btn-retry').style.display = 'none';
   resetThought();
-  currentAssistant = addMsg('assistant', '');
-  currentAssistant.querySelector('.text').innerHTML = '<span class="typing">...</span>';
+  bubble.querySelector('.text').innerHTML = '<span class="typing">...</span>';
 
   try {
     const res = await window.krait.chat(K.model, K.messages, {
@@ -963,28 +1116,59 @@ async function runTurn() {
       enabledTools: enabledTools(),
       skills: activeSkillHints(),
     });
-    const note = currentAssistant.querySelector('.tok-note');
+    const note = bubble.querySelector('.tok-note');
+    const sameChat = K.sessionId === session0;
     if (res.error) {
-      currentAssistant.querySelector('.text').textContent = 'Error: ' + res.error;
+      bubble.querySelector('.text').textContent = 'Error: ' + res.error;
+      // tell the model this request FAILED so the next message is not mistaken for a continuation
+      const marker = '(krait: your previous reply failed with an error: ' + String(res.error).slice(0, 160) +
+        '. It was never delivered. Wait for the user\'s next message.';
+      if (sameChat) K.messages.push({ role: 'assistant', content: marker });
+      if (window.krait && session0) await window.krait.appendSession(session0, { role: 'assistant', content: marker });
+    } else if (res.aborted) {
+      // keep the partial answer as context so the convo stays coherent
+      const t = bubble.querySelector('.text');
+      const partial = (t && t.dataset.raw) ? sanitizeFinal(cleanStream(t.dataset.raw)) : '';
+      if (partial) setMsgMarkdown(bubble, partial);
+      const marker = partial
+        ? partial + '\n\n(krait: the user pressed stop on this reply.)'
+        : '(krait: the user stopped this reply before it answered.)';
+      if (sameChat) K.messages.push({ role: 'assistant', content: marker });
+      if (window.krait && session0) await window.krait.appendSession(session0, { role: 'assistant', content: marker });
     } else {
-      setMsgMarkdown(currentAssistant, sanitizeFinal(res.text) || '(empty reply)');
-      K.messages.push({ role: 'assistant', content: res.text || '' });
+      setMsgMarkdown(bubble, sanitizeFinal(res.text) || '(empty reply)');
+      if (sameChat) K.messages.push({ role: 'assistant', content: res.text || '' });
       if (note && res.usage) {
-        let n = '+' + res.usage.total + ' tok' + (res.usage.estimated ? ' (est.)' : '');
-        const est = estimateCost(K.model, res.usage);
+        // realistic numbers: the headline is the REPLY tokens (what your provider dashboard shows),
+        // prompt tokens on hover
+        const u = res.usage;
+        const last = u.last || {};
+        const outTok = (last.output != null) ? last.output : (u.output || 0);
+        const inTok = (last.input != null) ? last.input : (u.input || 0);
+        let n = '+' + (outTok || u.total) + ' tok' + (u.estimated ? ' (est.)' : '');
+        const est = estimateCost(K.model, u);
         if (est !== null) n += ' \u00b7 ~$' + est.toFixed(4);
         note.textContent = n;
+        note.title = 'prompt ' + Number(inTok).toLocaleString() + ' + reply ' + Number(outTok).toLocaleString() +
+          ' = ' + Number(u.total).toLocaleString() + ' tokens (matches your provider dashboard)';
       }
       if (res.usage) {
-        K.tokens += res.usage.total;
+        const last = res.usage.last || {};
+        const outTok = (last.output != null) ? last.output : (res.usage.output != null ? res.usage.output : res.usage.total || 0);
+        K.tokens += outTok;
         updateTokenInfo();
       }
-      if (window.krait && K.sessionId) {
-        await window.krait.appendSession(K.sessionId, { role: 'assistant', content: res.text || '' });
+      if (window.krait && session0) {
+        await window.krait.appendSession(session0, { role: 'assistant', content: res.text || '' });
       }
     }
   } catch (err) {
-    currentAssistant.querySelector('.text').textContent = 'Error: ' + err.message;
+    bubble.querySelector('.text').textContent = 'Error: ' + err.message;
+    const marker = '(krait: your previous reply crashed: ' + String(err.message).slice(0, 160) + '. Wait for the user\'s next message.)';
+    if (K.sessionId === session0) K.messages.push({ role: 'assistant', content: marker });
+    if (window.krait && session0) {
+      try { await window.krait.appendSession(session0, { role: 'assistant', content: marker }); } catch {}
+    }
   }
 
   finishThought(); // in case the model thought but never streamed an answer
@@ -992,8 +1176,17 @@ async function runTurn() {
   $('btn-send').style.display = '';
   $('btn-stop').style.display = 'none';
   $('btn-retry').style.display = '';
-  currentAssistant = null;
+  if (currentAssistant === bubble) currentAssistant = null;
   scrollDown();
+
+  // queued messages (typed while the AI was working) send now, in THIS chat
+  if (K.queue.length && K.sessionId === session0) {
+    const next = K.queue.shift();
+    renderQueue();
+    await startUserTurn(next.text, next.images);
+  } else if (K.queue.length) {
+    renderQueue(); // keep queued; runs after the next turn in the chat you are viewing
+  }
 }
 
 /* ═══════════ Rough cost estimate (paid providers only) ═══════════ */
@@ -1120,7 +1313,8 @@ async function refreshSessionList() {
     el.className = 'session-item' + (s.id === K.sessionId ? ' active' : '');
     const name = document.createElement('span');
     name.textContent = (s.name || 'chat').slice(0, 22);
-    name.onclick = () => resumeSession(s.id);
+    el.title = 'Open chat';
+    el.onclick = () => { if (s.id !== K.sessionId) resumeSession(s.id); };
     const del = document.createElement('span');
     del.className = 's-del';
     del.textContent = '\u00d7';
@@ -1139,22 +1333,34 @@ async function refreshSessionList() {
 
 async function resumeSession(id) {
   if (!window.krait) return;
-  const msgs = await window.krait.loadSession(id);
-  if (!msgs) return;
-  K.sessionId = id;
-  K.messages = msgs.map(m => ({ role: m.role, content: m.content }));
-  const box = $('messages');
-  box.innerHTML = '';
-  for (const m of K.messages) {
-    const el = addMsg(m.role, '');
-    if (m.role === 'assistant') setMsgMarkdown(el, m.content);
-    else el.querySelector('.text').textContent = m.content;
+  try {
+    const msgs = await window.krait.loadSession(id);
+    if (!msgs) { toast('Could not load that chat'); return; }
+    currentAssistant = null;   // detach any live stream from the previous chat
+    resetToolGroup();
+    K.sessionId = id;
+    // sanitize: old chats may contain raw tool-call debris - never render that
+    K.messages = msgs.map(m => ({
+      role: m.role,
+      content: m.role === 'assistant' ? sanitizeFinal(m.content || '') : (m.content || ''),
+    }));
+    const box = $('messages');
+    box.innerHTML = '';
+    for (const m of K.messages) {
+      const el = addMsg(m.role, '');
+      if (m.role === 'assistant') setMsgMarkdown(el, m.content);
+      else el.querySelector('.text').textContent = m.content;
+    }
+    if (!K.messages.length) renderWelcome();
+    refreshSessionList();
+  } catch (e) {
+    toast('Could not open chat: ' + e.message);
   }
-  if (!K.messages.length) renderWelcome();
-  refreshSessionList();
 }
 
 function newChat() {
+  currentAssistant = null;  // the running turn keeps writing to its own session in the background
+  resetToolGroup();
   K.messages = [];
   K.sessionId = null;
   K.tokens = 0;
