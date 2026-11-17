@@ -31,7 +31,7 @@ if ($remotes -contains 'origin') { & $git -C $repoRoot remote remove origin | Ou
 & $git -C $repoRoot remote add origin "https://github.com/$Repo.git" | Out-Null
 # git writes progress to stderr; EAP Stop would treat that as a fatal error - relax it for the push
 $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-& $git -C $repoRoot push origin master 2>&1 | ForEach-Object { Write-Output "  $_" }
+& $git -C $repoRoot push origin main 2>&1 | ForEach-Object { Write-Output "  $_" }
 $pushCode = $LASTEXITCODE
 $ErrorActionPreference = $eap
 if ($pushCode -ne 0) { throw 'git push failed - was the GitHub window closed instead of approved?' }
@@ -75,7 +75,7 @@ if (-not $raw.Contains($wantUrl)) {
   & $git -C $repoRoot add $cli
   & $git -C $repoRoot commit -m "/update check now reads $wantUrl" | Out-Null
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  & $git -C $repoRoot push origin master 2>&1 | ForEach-Object { Write-Output "  $_" }
+  & $git -C $repoRoot push origin main 2>&1 | ForEach-Object { Write-Output "  $_" }
   $ErrorActionPreference = $eap
   Write-Output '  rebuilding the release zips so they carry the right URL...'
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kraitDir 'package.ps1') -Arch x64
