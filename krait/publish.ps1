@@ -68,7 +68,9 @@ if ($owner -ne 'Avepier') {
 
 # ── 4. push source + tag ──
 Write-Output '[4/6] pushing source and tag...'
-& $git -C $repoRoot remote remove origin 2>$null
+# (no 2>$null here - a stderr write with ErrorActionPreference Stop kills the script)
+$remotes = & $git -C $repoRoot remote
+if ($remotes -contains 'origin') { & $git -C $repoRoot remote remove origin | Out-Null }
 & $git -C $repoRoot remote add origin "https://github.com/$Repo.git" | Out-Null
 & $git -C $repoRoot push origin master 2>&1 | ForEach-Object { Write-Output "  $_" }
 & $git -C $repoRoot tag -f $Tag | Out-Null
