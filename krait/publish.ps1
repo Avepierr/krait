@@ -116,8 +116,10 @@ else {
 }
 $uploadBase = ($rel.upload_url -split '\{')[0]
 foreach ($zipName in @("krait-$version-win-x64.zip", "krait-$version-win-ia32.zip")) {
+  # look in dist\ first, then the Desktop\Krait folder where release copies live
   $zip = Join-Path $distDir $zipName
-  if (-not (Test-Path $zip)) { Write-Output "  SKIPPED (not found): $zip"; continue }
+  if (-not (Test-Path $zip)) { $zip = Join-Path (Join-Path $env:USERPROFILE 'OneDrive\Desktop\Krait') $zipName }
+  if (-not (Test-Path $zip)) { Write-Output "  SKIPPED (not found): $zipName"; continue }
   Write-Output "  uploading $zipName ..."
   $headers = @{ Authorization = "token $token"; 'Content-Type' = 'application/zip'; 'User-Agent' = 'krait-publish' }
   Invoke-RestMethod -Method Post -Uri "$uploadBase`?name=$zipName" -Headers $headers -InFile $zip | Out-Null
