@@ -32,11 +32,20 @@ foreach ($zipName in @("krait-$version-win-x64.zip", "krait-$version-win-ia32.zi
   $zip = Join-Path $distDir $zipName
   if (-not (Test-Path $zip)) { $zip = Join-Path (Join-Path $env:USERPROFILE 'OneDrive\Desktop\Krait') $zipName }
   if (-not (Test-Path $zip)) { Write-Output "SKIPPED (not found): $zipName"; continue }
-  # delete an existing asset with the same name so re-runs are clean
-  foreach ($a in $rel.assets) { if ($a.name -eq $zipName) { Invoke-RestMethod -Method DELETE -Uri "https://api.github.com/repos/$Repo/releases/assets/$($a.id)" -Headers $headers | Out-Null; Write-Output "  replaced old asset: $zipName" } }
+  # skip assets that are already on the release
+  $existing = $rel.assets | Where-Object name -eq $zipName
+  if ($existing) { Write-Output "  already on the release: $zipName"; continue }
   $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
-  Write-Output "uploading $zipName ($size MB)..."
-  Invoke-RestMethod -Method Post -Uri "$uploadBase`?name=$zipName" -Headers @{ Authorization = "token $token"; 'Content-Type' = 'application/zip'; 'User-Agent' = 'krait-publish' } -InFile $zip | Out-Null
-  Write-Output "  done"
+  # upload with retries - big transfers over flaky connections can drop
+  $ok = $false
+  for ($try = 1; $try -le 3 -and -not $ok; $try++) {
+    try {
+      Write-Output "uploading $zipName ($size MB, attempt $try)..."
+      Invoke-RestMethod -Method Post -Uri "$uploadBase`?name=$zipName" -Headers @{ Authorization = "token $token"; 'Content-Type' = 'application/zip'; 'User-Agent' = 'krait-publish' } -InFile $zip -TimeoutSec 900 | Out-Null
+      $ok = $true
+      Write-Output "  done"
+    } catch { Write-Output "  attempt $try failed: $($_.Exception.Message)"; Start-Sleep -Seconds 5 }
+  }
+  if (-not $ok) { throw "upload of $zipName failed after 3 attempts" }
 }
 Write-Output "UPLOAD COMPLETE: https://github.com/$Repo/releases/tag/$Tag"

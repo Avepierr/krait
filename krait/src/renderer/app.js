@@ -2385,6 +2385,14 @@ function initAccountFlow() {
     toast('Signed in as ' + u);
     startOnboarding(getAccount());
   };
+  // skip: use krait without creating an account (guest, stays on this PC)
+  $('auth-skip').onclick = () => {
+    localStorage.setItem('krait-account', JSON.stringify({ user: 'guest', name: 'Guest', hash: '', onboarded: false, created: Date.now(), answers: {}, skipped: true }));
+    $('auth-screen').classList.add('hidden');
+    $('auth-err').textContent = '';
+    toast('Skipped sign-in - you can create an account anytime in Settings');
+    startOnboarding(getAccount());
+  };
 }
 
 /* ═══════════ Onboarding questionnaire ═══════════ */
