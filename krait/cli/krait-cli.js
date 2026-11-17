@@ -18,7 +18,7 @@ const { runAgent } = require('../src/engine/agent');
 
 const DATA = path.join(os.homedir(), '.krait');
 const VERSION = require('../package.json').version;
-const UPDATE_URL = 'https://raw.githubusercontent.com/Avepier/krait/main/version.json';
+const UPDATE_URL = 'https://raw.githubusercontent.com/Avepierr/krait/main/version.json';
 
 const DEFAULTS = {
   openrouter: 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free',
