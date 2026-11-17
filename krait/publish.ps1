@@ -29,11 +29,18 @@ Write-Output '  >>> IF A GITHUB WINDOW OPENS: APPROVE IT (logging in as github.c
 $remotes = & $git -C $repoRoot remote
 if ($remotes -contains 'origin') { & $git -C $repoRoot remote remove origin | Out-Null }
 & $git -C $repoRoot remote add origin "https://github.com/$Repo.git" | Out-Null
+# git writes progress to stderr; EAP Stop would treat that as a fatal error - relax it for the push
+$eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
 & $git -C $repoRoot push origin master 2>&1 | ForEach-Object { Write-Output "  $_" }
-if ($LASTEXITCODE -ne 0) { throw 'git push failed - was the GitHub window closed instead of approved?' }
+$pushCode = $LASTEXITCODE
+$ErrorActionPreference = $eap
+if ($pushCode -ne 0) { throw 'git push failed - was the GitHub window closed instead of approved?' }
 & $git -C $repoRoot tag -f $Tag | Out-Null
+$eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
 & $git -C $repoRoot push -f origin $Tag 2>&1 | ForEach-Object { Write-Output "  $_" }
-if ($LASTEXITCODE -ne 0) { throw 'git tag push failed' }
+$pushCode = $LASTEXITCODE
+$ErrorActionPreference = $eap
+if ($pushCode -ne 0) { throw 'git tag push failed' }
 Write-Output '  pushed - the login is now saved on this PC.'
 
 # ── 2. read the stored credential ──
@@ -67,7 +74,9 @@ if (-not $raw.Contains($wantUrl)) {
   Set-Content $cli $raw -NoNewline
   & $git -C $repoRoot add $cli
   & $git -C $repoRoot commit -m "/update check now reads $wantUrl" | Out-Null
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   & $git -C $repoRoot push origin master 2>&1 | ForEach-Object { Write-Output "  $_" }
+  $ErrorActionPreference = $eap
   Write-Output '  rebuilding the release zips so they carry the right URL...'
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kraitDir 'package.ps1') -Arch x64
   if ($LASTEXITCODE -ne 0) { throw 'x64 zip build failed' }
