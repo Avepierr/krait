@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 Write-Output "staging krait $version..."
 robocopy $src $stage /E /NFL /NDL /NJH /NJS /NP `
   /XD "$src\.git" "$src\checks" "$src\study" "$src\dist" "$src\out" "$src\build" "$src\release" `
-  /XF '*.log' 'package-lock.json' | Out-Null
+  /XF '*.log' 'package-lock.json' 'README-install.txt' 'snake-game.html' 'tic-tac-toe.html' 'tic-tac-toe-v2.html' 'tic-tac-toe-v3.html' 'tic-tac-toe-v4.html' 'publish.ps1' 'package.ps1' 'upload-zips.ps1' 'fetch-electron.js' | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "staging failed (robocopy exit $LASTEXITCODE)" }
 
 # 32-bit build: keep electron's JS wrapper, swap only the binary dist for the ia32 build.
