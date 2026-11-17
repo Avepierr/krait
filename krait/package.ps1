@@ -1,10 +1,12 @@
-# package.ps1 — builds the user-facing zip: dist\krait-<version>-win-x64.zip
+# package.ps1 — builds the user-facing zip: dist\krait-<version>-win-<arch>.zip
 # A stranger downloads this, unzips it, and runs install.ps1 inside the krait folder.
+# -Arch x64 (default) or ia32 (32-bit Windows).
+param([string]$Arch = 'x64')
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $version = (Get-Content (Join-Path $src 'package.json') -Raw | ConvertFrom-Json).version
 $dist = Join-Path (Split-Path -Parent $src) 'dist'
-$outZip = Join-Path $dist "krait-$version-win-x64.zip"
+$outZip = Join-Path $dist "krait-$version-win-$Arch.zip"
 New-Item -ItemType Directory -Force $dist | Out-Null
 
 # stage as <temp>\krait\... so the zip extracts into a krait folder
@@ -16,6 +18,30 @@ robocopy $src $stage /E /NFL /NDL /NJH /NJS /NP `
   /XD "$src\.git" "$src\checks" "$src\study" "$src\dist" "$src\out" "$src\build" "$src\release" `
   /XF '*.log' 'package-lock.json' | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "staging failed (robocopy exit $LASTEXITCODE)" }
+
+# 32-bit build: keep electron's JS wrapper, swap only the binary dist for the ia32 build.
+# electron 44+ dropped 32-bit windows - the last line with win32/ia32 is 43.x (supported to Jan 2027).
+$ia32Electron = '43.8.10'
+if ($Arch -eq 'ia32') {
+  Write-Output "downloading 32-bit electron $ia32Electron into the package..."
+  $elDir = Join-Path $stage 'node_modules\electron'
+  & node (Join-Path $src 'fetch-electron.js') $elDir ia32 $ia32Electron
+  if ($LASTEXITCODE -ne 0) { throw '32-bit electron fetch failed' }
+}
+
+# readme travels with the zip
+Copy-Item (Join-Path $src 'README-install.txt') (Join-Path $stage 'README.txt') -Force
+
+# sanity: the staged electron must really be the requested arch
+# (capture through a file: powershell relay can drop native stdout when stderr is redirected)
+$archFile = Join-Path $env:TEMP 'krait-arch-check.txt'
+Remove-Item $archFile -Force -ErrorAction SilentlyContinue
+$env:ELECTRON_RUN_AS_NODE = '1'
+cmd /c "`"$stage\node_modules\electron\dist\electron.exe`" -p process.arch > `"$archFile`" 2>nul"
+Remove-Item env:ELECTRON_RUN_AS_NODE
+$archOut = (Get-Content $archFile -ErrorAction SilentlyContinue | Select-Object -First 1) -replace '\s',''
+if ($archOut -ne $Arch) { throw "electron arch mismatch: got '$archOut', wanted '$Arch'" }
+Write-Output "electron arch verified: $archOut"
 
 Write-Output "zipping -> $outZip"
 if (Get-Command tar -ErrorAction SilentlyContinue) {
