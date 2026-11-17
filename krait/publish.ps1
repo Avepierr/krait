@@ -25,6 +25,11 @@ function Api([string]$method, [string]$url, [object]$body, [string]$ct = 'applic
 
 # ── 1. push source + tag (this stores the login on success) ──
 Write-Output '[1/6] pushing source and tag...'
+# keep version.json (the /update + popup endpoint) in sync with package.json
+$versionJson = Join-Path $repoRoot 'version.json'
+Set-Content $versionJson ("{`n  `"version`": `"" + $version + `"`n}" + "`n") -NoNewline
+& $git -C $repoRoot add $versionJson
+& $git -C $repoRoot commit -m "release $Tag" 2>&1 | Out-Null
 Write-Output '  >>> IF A GITHUB WINDOW OPENS: APPROVE IT (logging in as github.com/Avepierr) <<<'
 $remotes = & $git -C $repoRoot remote
 if ($remotes -contains 'origin') { & $git -C $repoRoot remote remove origin | Out-Null }

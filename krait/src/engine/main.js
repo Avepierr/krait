@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, nativeImage, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, nativeImage, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const { exec } = require('child_process');
@@ -693,3 +693,33 @@ app.on('window-all-closed', () => {
 });
 
 app.whenReady().then(createWindow);
+
+// ─── Update check: popup when a newer krait is on GitHub ───
+const UPDATE_URL = 'https://raw.githubusercontent.com/Avepierr/krait/main/version.json';
+async function checkForUpdate() {
+  try {
+    const res = await fetch(UPDATE_URL, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return;
+    const remote = (await res.json()).version;
+    const mine = app.getVersion();
+    const isNewer = (a, b) => {
+      const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+      for (let i = 0; i < 3; i++) { if ((pa[i] || 0) > (pb[i] || 0)) return true; if ((pa[i] || 0) < (pb[i] || 0)) return false; }
+      return false;
+    };
+    if (isNewer(remote, mine)) {
+      const r = await dialog.showMessageBox({
+        type: 'info',
+        title: 'krait update',
+        message: 'krait v' + remote + ' is out!',
+        detail: 'You are on v' + mine + '. New versions bring fixes and new features - always free.',
+        buttons: ['Download now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+        icon: nativeImage.createFromPath(path.join(PROJECT_DIR, 'assets', 'krait.ico')),
+      });
+      if (r.response === 0) shell.openExternal('https://github.com/Avepierr/krait/releases/latest');
+    }
+  } catch {} // offline or GitHub slow: silently skip - never nag over nothing
+}
+app.whenReady().then(() => { setTimeout(checkForUpdate, 8000); }); // after startup settles, 4GB-friendly timing
