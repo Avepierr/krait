@@ -27,7 +27,8 @@ function Api([string]$method, [string]$url, [object]$body, [string]$ct = 'applic
 Write-Output '[1/6] pushing source and tag...'
 # keep version.json (the /update + popup endpoint) in sync with package.json
 $versionJson = Join-Path $repoRoot 'version.json'
-Set-Content $versionJson ("{`n  `"version`": `"" + $version + `"`n}" + "`n") -NoNewline
+$vj = '{' + [char]10 + '  "version": "' + $version + '"' + [char]10 + '}' + [char]10
+Set-Content $versionJson $vj -NoNewline
 & $git -C $repoRoot add $versionJson
 & $git -C $repoRoot commit -m "release $Tag" 2>&1 | Out-Null
 Write-Output '  >>> IF A GITHUB WINDOW OPENS: APPROVE IT (logging in as github.com/Avepierr) <<<'
