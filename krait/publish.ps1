@@ -98,21 +98,13 @@ Api PUT "https://api.github.com/repos/$Repo/topics" @{ names = @('ai', 'ai-agent
 
 # ── 6. release + zips ──
 Write-Output "[6/6] creating release $Tag..."
-$notes = @"
-krait $Tag - by Avepier
-
-**Free-first release:** free models on top of every list, and a full daily free limit
-no longer blocks you - krait auto-switches to another free provider.
-
-- opencode-style terminal chat: type ``krait`` in PowerShell
-- agent mode with y/N permission prompts (reads/writes/edits files, asks first)
-- model picker with search + Free tags + recents, UI color themes (``/theme``)
-- ``/update`` version check against this repo
-- real installer: unzip, run install.ps1 - desktop app + terminal command, no admin needed
-- 32-bit Windows build (Electron 43, the last 32-bit line)
-
-**Downloads:** win-x64 for most PCs, win-ia32 for 32-bit Windows.
-"@
+# notes come from krait\RELEASE-NOTES.md so every release keeps its own story
+$notesFile = Join-Path $kraitDir 'RELEASE-NOTES.md'
+if (Test-Path $notesFile) {
+  $notes = Get-Content $notesFile -Raw
+} else {
+  $notes = "krait $Tag - by Avepier`n`nFree, model-agnostic AI coding agent: desktop app + terminal chat.`n`nDownloads: win-x64 for most PCs, win-ia32 for 32-bit Windows.`n"
+}
 $rel = $null
 try { $rel = Api GET "https://api.github.com/repos/$Repo/releases/tags/$Tag" } catch {}
 if ($rel -and $rel.id) { Write-Output '  release already exists - uploading assets to it' }
