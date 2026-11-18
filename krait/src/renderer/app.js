@@ -120,6 +120,7 @@ async function init() {
   document.querySelectorAll('.set-nav').forEach(n => {
     n.onclick = () => showSettingsPage(n.dataset.page);
   });
+  wireCloud();
 
   // usage
   $('usage-reset').onclick = async () => {
@@ -2101,7 +2102,7 @@ function showSettings(page) {
 }
 function showSettingsPage(page) {
   document.querySelectorAll('.set-nav').forEach(n => n.classList.toggle('active', n.dataset.page === page));
-  for (const p of ['account', 'appearance', 'keys', 'usage', 'capabilities', 'plugins', 'skills', 'connectors', 'mcp']) {
+  for (const p of ['account', 'appearance', 'keys', 'usage', 'capabilities', 'plugins', 'skills', 'connectors', 'mcp', 'showcase', 'admin']) {
     $('page-' + p).style.display = p === page ? '' : 'none';
   }
   if (page === 'usage') showUsage();
@@ -2109,6 +2110,149 @@ function showSettingsPage(page) {
   if (page === 'skills') showSkills();
   if (page === 'connectors') showConnectors();
   if (page === 'mcp') renderMcp();
+  if (page === 'showcase') showShowcase();
+  if (page === 'admin') showAdmin();
+}
+
+/* ═══════════ Online account + Showcase + Owner panel (v2) ═══════════ */
+const C = window.KraitCloud;
+let myCloudProfile = null;
+
+function cloudErr(msg) { const e = $('cloud-err'); if (e) e.textContent = msg; }
+
+async function cloudRefreshUi() {
+  if (!C) return;
+  const who = C.signedIn();
+  $('cloud-form').style.display = who ? 'none' : '';
+  $('cloud-who').style.display = who ? '' : 'none';
+  const st = $('cloud-status');
+  if (!who) { st.textContent = 'not signed in'; $('nav-admin').style.display = 'none'; myCloudProfile = null; return; }
+  st.textContent = 'signed in';
+  try {
+    myCloudProfile = await C.myProfile();
+    const p = myCloudProfile;
+    $('cloud-who-line').textContent = (p ? (p.display_name || p.username) + ' (@' + p.username + ')' : (C.currentUser() || {}).email) +
+      (p && p.is_admin ? ' - owner account' : '') + (p && p.banned ? ' - banned: ' + (p.ban_reason || '') : '');
+    $('nav-admin').style.display = p && p.is_admin ? '' : 'none';
+  } catch { $('cloud-who-line').textContent = (C.currentUser() || {}).email || 'signed in'; }
+}
+
+async function cloudSignIn(create) {
+  cloudErr('');
+  const email = $('cloud-email').value.trim();
+  const pass = $('cloud-pass').value;
+  const username = $('cloud-user').value.trim();
+  if (!email) return cloudErr('Enter your email.');
+  if (pass.length < 6) return cloudErr('Password needs 6+ characters.');
+  if (create && !/^[\w .-]{3,20}$/.test(username)) return cloudErr('Username: 3-20 letters, numbers or dots.');
+  try {
+    if (create) { await C.signUp(email, pass, username, username); toast('Account created - welcome!'); }
+    else { await C.signIn(email, pass); toast('Signed in'); }
+    $('cloud-pass').value = '';
+    await cloudRefreshUi();
+  } catch (e) {
+    cloudErr(e.status === 400 ? 'Wrong email or password (or the email is already used).' : String(e.message || e));
+  }
+}
+
+async function cloudSignOut() {
+  try { await C.signOut(); } catch {}
+  myCloudProfile = null;
+  $('nav-admin').style.display = 'none';
+  await cloudRefreshUi();
+  toast('Signed out');
+}
+
+async function showShowcase() {
+  const list = $('sc-list');
+  if (!C || !C.signedIn()) { list.innerHTML = '<div class="key-sub">Sign in with an online account (Account tab) to browse the Showcase.</div>'; return; }
+  list.innerHTML = '<div class="key-sub">loading...</div>';
+  try {
+    const posts = await C.listShowcase(50);
+    if (!posts.length) { list.innerHTML = '<div class="key-sub">Nothing here yet - be the first: open a chat and press "Share this chat".</div>'; return; }
+    list.innerHTML = posts.map(p =>
+      '<div class="sc-card">' +
+        '<div class="sc-top"><strong>' + esc(p.title) + '</strong><span class="sc-kind">' + esc(p.kind) + '</span></div>' +
+        '<div class="sc-author">' + esc((p.author && (p.author.display_name || p.author.username)) || 'unknown') + ' &middot; ' + fmtDate(p.created_at) + '</div>' +
+        '<div class="sc-body">' + esc((p.body || '').slice(0, 400)) + '</div>' +
+        '<div class="sc-tags">' + (p.tags || []).map(t => '<span class="sc-tag">#' + esc(t) + '</span>').join(' ') + '</div>' +
+        '<div class="sc-row">' +
+          '<button class="conn-btn sc-like" data-id="' + p.id + '">&#10084; ' + (p.likes || 0) + '</button>' +
+          '<button class="conn-btn sc-report" data-id="' + p.id + '">Report</button>' +
+          (myCloudProfile && myCloudProfile.is_admin ? '<button class="conn-btn sc-take" data-id="' + p.id + '">Takedown</button>' : '') +
+        '</div>' +
+      '</div>').join('');
+    list.querySelectorAll('.sc-like').forEach(b => b.onclick = async () => {
+      try { await C.likePost(b.dataset.id); showShowcase(); } catch (e) { toast(e.message); }
+    });
+    list.querySelectorAll('.sc-report').forEach(b => b.onclick = async () => {
+      const reason = prompt('What is wrong with this post?');
+      if (!reason) return;
+      try { await C.report({ postId: b.dataset.id, reason }); toast('Report sent to the owner'); } catch (e) { toast(e.message); }
+    });
+    list.querySelectorAll('.sc-take').forEach(b => b.onclick = async () => {
+      try { await C.adminTakedown(b.dataset.id, true); toast('Post taken down'); showShowcase(); } catch (e) { toast(e.message); }
+    });
+  } catch (e) { list.innerHTML = '<div class="key-sub">' + esc(e.message) + '</div>'; }
+}
+
+async function shareCurrentChat() {
+  if (!C || !C.signedIn()) { toast('Sign in first (Account tab)'); return; }
+  const msgs = (K.messages || []).filter(m => m && m.content);
+  if (!msgs.length) { toast('Open a chat with some messages first'); return; }
+  const first = msgs.find(m => m.role === 'user');
+  const title = first ? String(first.content).replace(/\s+/g, ' ').slice(0, 60) : 'krait chat';
+  const body = msgs.slice(-6).map(m => (m.role === 'user' ? 'You: ' : 'AI: ') + String(m.content).slice(0, 600)).join('\n\n');
+  try { await C.sharePost({ title, body, kind: 'chat', tags: ['chat'] }); toast('Shared to the Showcase'); showShowcase(); }
+  catch (e) { toast(e.message); }
+}
+
+async function showAdmin() {
+  const reports = $('ad-reports'), users = $('ad-users');
+  if (!C || !C.signedIn() || !myCloudProfile || !myCloudProfile.is_admin) {
+    reports.innerHTML = '<div class="key-sub">Owner only.</div>'; users.innerHTML = '';
+    return;
+  }
+  reports.innerHTML = '<div class="key-sub">loading...</div>';
+  users.innerHTML = '';
+  try {
+    const rs = await C.adminReports();
+    reports.innerHTML = rs.length ? rs.map(r =>
+      '<div class="ad-row"><div><strong>#' + r.id.slice(0, 6) + '</strong> ' + esc(r.reason) +
+      '<div class="key-sub">by ' + esc((r.reporter && r.reporter.username) || 'unknown') + ' &middot; ' + fmtDate(r.created_at) +
+      ' &middot; ' + esc(r.status) + (r.target_post_id ? ' &middot; post ' + r.target_post_id.slice(0, 6) : '') + '</div></div>' +
+      '<button class="conn-btn ad-close" data-id="' + r.id + '"' + (r.status === 'closed' ? ' disabled' : '') + '>Close</button></div>').join('')
+      : '<div class="key-sub">No reports - quiet is good.</div>';
+    reports.querySelectorAll('.ad-close').forEach(b => b.onclick = async () => {
+      try { await C.adminCloseReport(b.dataset.id, 'closed'); toast('Report closed'); showAdmin(); } catch (e) { toast(e.message); }
+    });
+    const us = await C.adminUsers();
+    users.innerHTML = us.map(u =>
+      '<div class="ad-row"><div><strong>' + esc(u.username) + '</strong>' +
+      (u.is_admin ? ' <span class="sc-tag">owner</span>' : '') + (u.banned ? ' <span class="sc-tag">banned</span>' : '') +
+      '<div class="key-sub">' + esc(u.display_name || '') + ' &middot; joined ' + fmtDate(u.created_at) + (u.banned && u.ban_reason ? ' &middot; reason: ' + esc(u.ban_reason) : '') + '</div></div>' +
+      '<button class="conn-btn ad-ban" data-id="' + u.id + '" data-banned="' + (u.banned ? '1' : '0') + '">' + (u.banned ? 'Unban' : 'Ban') + '</button></div>').join('');
+    users.querySelectorAll('.ad-ban').forEach(b => b.onclick = async () => {
+      const banning = b.dataset.banned !== '1';
+      let reason = '';
+      if (banning) { reason = prompt('Ban reason (shown to the user):'); if (reason === null) return; }
+      try { await C.adminSetBan(b.dataset.id, banning, reason); toast(banning ? 'Banned' : 'Unbanned'); showAdmin(); } catch (e) { toast(e.message); }
+    });
+  } catch (e) { reports.innerHTML = '<div class="key-sub">' + esc(e.message) + '</div>'; }
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function fmtDate(d) { try { return new Date(d).toLocaleDateString(); } catch { return ''; } }
+
+function wireCloud() {
+  if (!C) return;
+  $('cloud-signin').onclick = () => cloudSignIn(false);
+  $('cloud-signup').onclick = () => cloudSignIn(true);
+  $('cloud-signout').onclick = cloudSignOut;
+  $('sc-refresh').onclick = showShowcase;
+  $('sc-share').onclick = shareCurrentChat;
+  $('ad-refresh').onclick = showAdmin;
+  cloudRefreshUi();
 }
 function closeKeys() { $('key-screen').classList.remove('show'); }
 

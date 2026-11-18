@@ -211,12 +211,53 @@
       <button class="set-nav" data-page="skills">&#127919; Skills</button>
       <button class="set-nav" data-page="connectors">&#128268; Connectors</button>
       <button class="set-nav" data-page="mcp">&#127760; MCP servers</button>
+<button class="set-nav" data-page="showcase">&#127942; Showcase</button>
+<button class="set-nav" data-page="admin" id="nav-admin" style="display:none">&#128737; Owner panel</button>
       <div class="set-side-foot">krait v1.9.5 &middot; by Avepier</div>
     </aside>
     <div class="set-main">
       <div class="set-page" id="page-account">
         <h2>Account</h2>
+        <div class="cloud-box" id="cloud-box">
+          <div class="cloud-head">
+            <strong>Online account</strong>
+            <span id="cloud-status" class="cloud-status">not signed in</span>
+          </div>
+          <p class="key-sub" id="cloud-sub">Optional - saves your chats online so they follow you to any PC. API keys never leave this PC.</p>
+          <div id="cloud-form">
+            <input id="cloud-email" placeholder="Email" autocomplete="off">
+            <input id="cloud-pass" type="password" placeholder="Password (6+ characters)">
+            <input id="cloud-user" placeholder="Username (shown on Showcase)">
+            <div id="cloud-err" class="auth-err"></div>
+            <button id="cloud-signin" class="conn-btn on">Sign in</button>
+            <button id="cloud-signup" class="conn-btn">Create account</button>
+          </div>
+          <div id="cloud-who" style="display:none">
+            <div id="cloud-who-line" class="key-sub"></div>
+            <button id="cloud-signout" class="conn-btn">Sign out</button>
+          </div>
+        </div>
         <div class="feat-list" id="feat-list"></div>
+      </div>
+      <div class="set-page" id="page-showcase" style="display:none">
+        <h2>Showcase</h2>
+        <p class="key-sub">Creations people shared from krait. Sign in with an online account to like, share or report.</p>
+        <div class="cloud-row">
+          <button id="sc-share" class="conn-btn on">Share this chat</button>
+          <button id="sc-refresh" class="conn-btn">Refresh</button>
+        </div>
+        <div id="sc-list" class="sc-list"></div>
+      </div>
+      <div class="set-page" id="page-admin" style="display:none">
+        <h2>Owner panel</h2>
+        <p class="key-sub">Only the owner account sees this. Bans and takedowns are enforced by the server, not just this screen.</p>
+        <div class="cloud-row">
+          <button id="ad-refresh" class="conn-btn on">Refresh</button>
+        </div>
+        <h3 class="ad-h">Reports</h3>
+        <div id="ad-reports" class="ad-list"></div>
+        <h3 class="ad-h">Users</h3>
+        <div id="ad-users" class="ad-list"></div>
       </div>
       <div class="set-page" id="page-appearance" style="display:none">
         <h2>Appearance</h2>
@@ -388,6 +429,7 @@
 <!-- toast -->
 <div id="toast" class="hidden"></div>
 
+<script src="lib/krait-cloud.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
