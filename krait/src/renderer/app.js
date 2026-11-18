@@ -59,6 +59,7 @@ async function init() {
     if (last && Array.isArray(last.msgs) && last.msgs.length) {
       K.sessionId = last.id;
       K.messages = last.msgs;
+      K.cloudThreadId = last.cloudId || null;
       const box = $('messages');
       box.innerHTML = '';
       for (const m of K.messages) {
@@ -1306,6 +1307,7 @@ async function startUserTurn(text, images) {
   const msg = { role: 'user', content: text || 'Describe this image.' };
   if (images.length) msg.images = images;
   K.messages.push(msg);
+  cloudQueueSave();          // the moment you send, the chat is saved online (if sync is on)
   await ensureSession(text.slice(0, 40));
   await runTurn();
 }
@@ -1457,6 +1459,7 @@ async function runTurn() {
   }
 
   if (checkpointId && turnToolUsed) addRevertChip(bubble, checkpointId);
+  cloudQueueSave();          // save again once the reply landed
   finishThought(); // in case the model thought but never streamed an answer
   K.streaming = false;
   $('btn-send').style.display = '';
@@ -1921,6 +1924,7 @@ async function resumeSession(id) {
     currentAssistant = null;   // detach any live stream from the previous chat
     resetToolGroup();
     K.sessionId = id;
+    K.cloudThreadId = cloudThreadMap()[id] || null;  // reattach this chat to its online copy, if any
     K.tokens = 0;              // tokens are counted per chat - do not carry the old chat's count over
     K.inTok = 0;
     K.outTok = 0;
@@ -1935,6 +1939,7 @@ async function resumeSession(id) {
     try {
       localStorage.setItem('krait-last-chat', JSON.stringify({
         id,
+        cloudId: K.cloudThreadId,
         msgs: K.messages.slice(-30).map(m => ({ role: m.role, content: String(m.content || '').slice(0, 4000) })),
       }));
     } catch {}
@@ -1962,6 +1967,7 @@ function newChat() {
   resetToolGroup();
   K.messages = [];
   K.sessionId = null;
+  K.cloudThreadId = null;   // a brand new chat gets its own online copy
   K.tokens = 0;
   K.inTok = 0;
   K.outTok = 0;
@@ -2125,9 +2131,12 @@ async function cloudRefreshUi() {
   const who = C.signedIn();
   $('cloud-form').style.display = who ? 'none' : '';
   $('cloud-who').style.display = who ? '' : 'none';
+  $('sync-box').style.display = who ? '' : 'none';
   const st = $('cloud-status');
-  if (!who) { st.textContent = 'not signed in'; $('nav-admin').style.display = 'none'; myCloudProfile = null; return; }
+  if (!who) { st.textContent = 'not signed in'; $('nav-admin').style.display = 'none'; myCloudProfile = null; $('sync-list').innerHTML = ''; return; }
   st.textContent = 'signed in';
+  setSyncStatus(cloudSyncOn() ? 'on' : 'off');
+  renderCloudChats();
   try {
     myCloudProfile = await C.myProfile();
     const p = myCloudProfile;
@@ -2244,6 +2253,84 @@ async function showAdmin() {
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fmtDate(d) { try { return new Date(d).toLocaleDateString(); } catch { return ''; } }
 
+/* ── chat sync: your chats follow your account ── */
+function cloudSyncOn() { return localStorage.getItem('krait-sync-on') !== '0'; }
+function cloudThreadMap() { try { return JSON.parse(localStorage.getItem('krait-cloud-threads') || '{}'); } catch { return {}; } }
+function cloudRemember(sessionId, threadId) {
+  if (!sessionId || !threadId) return;
+  const m = cloudThreadMap();
+  if (m[sessionId] === threadId) return;
+  m[sessionId] = threadId;
+  try { localStorage.setItem('krait-cloud-threads', JSON.stringify(m)); } catch {}
+}
+let cloudSaveTimer = null;
+function cloudQueueSave() {
+  if (!C || !C.signedIn() || !cloudSyncOn()) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(() => { cloudSaveChat(); }, 700);
+}
+async function cloudSaveChat() {
+  if (!C || !C.signedIn() || !cloudSyncOn()) return;
+  const msgs = (K.messages || []).filter(m => m && m.content && m.role !== 'system');
+  if (!msgs.length) return;
+  const first = msgs.find(m => m.role === 'user');
+  const title = first ? String(first.content).replace(/\s+/g, ' ').slice(0, 60) : 'chat';
+  const payload = msgs.slice(-200).map(m => ({ role: m.role, content: String(m.content).slice(0, 20000) }));
+  try {
+    const id = await C.saveThread({ id: K.cloudThreadId || null, title, messages: payload });
+    if (id) { K.cloudThreadId = id; cloudRemember(K.sessionId, id); }
+    setSyncStatus('on - saved');
+  } catch (e) { setSyncStatus('save failed'); }
+}
+function setSyncStatus(txt) { const s = $('sync-status'); if (s) s.textContent = txt; }
+
+async function renderCloudChats() {
+  const box = $('sync-list');
+  if (!box) return;
+  if (!C || !C.signedIn()) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="key-sub">loading...</div>';
+  try {
+    const list = await C.listThreads();
+    if (!list.length) { box.innerHTML = '<div class="key-sub">No saved chats yet - they appear here as you talk.</div>'; return; }
+    box.innerHTML = list.map(t =>
+      '<div class="ad-row"><div><strong>' + esc(t.title || 'chat') + '</strong>' +
+      '<div class="key-sub">saved ' + fmtDate(t.updated_at) + '</div></div>' +
+      '<button class="conn-btn sync-open" data-id="' + t.id + '">Open</button></div>').join('');
+    box.querySelectorAll('.sync-open').forEach(b => b.onclick = () => openCloudChat(b.dataset.id));
+  } catch (e) { box.innerHTML = '<div class="key-sub">' + esc(e.message) + '</div>'; }
+}
+
+async function openCloudChat(id) {
+  try {
+    const t = await C.loadThread(id);
+    if (!t) { toast('Could not open that saved chat'); return; }
+    currentAssistant = null;
+    resetToolGroup();
+    K.sessionId = null;            // it lives online; a local copy starts on the next message
+    K.cloudThreadId = t.id;
+    K.tokens = 0;
+    K.inTok = 0;
+    K.outTok = 0;
+    updateTokenInfo();
+    pvFiles.clear();
+    K.messages = (t.messages || []).map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.role === 'assistant' ? sanitizeFinal(m.content || '') : (m.content || ''),
+    }));
+    const box = $('messages');
+    box.innerHTML = '';
+    for (const m of K.messages) {
+      const el = addMsg(m.role, '');
+      if (m.role === 'assistant') setMsgMarkdown(el, m.content);
+      else el.querySelector('.text').textContent = m.content;
+    }
+    if (!K.messages.length) renderWelcome();
+    closeKeys();
+    refreshSessionList();
+    toast('Opened your saved chat');
+  } catch (e) { toast('Could not open: ' + e.message); }
+}
+
 function wireCloud() {
   if (!C) return;
   $('cloud-signin').onclick = () => cloudSignIn(false);
@@ -2252,6 +2339,13 @@ function wireCloud() {
   $('sc-refresh').onclick = showShowcase;
   $('sc-share').onclick = shareCurrentChat;
   $('ad-refresh').onclick = showAdmin;
+  $('sync-on').checked = cloudSyncOn();
+  $('sync-on').onchange = () => {
+    localStorage.setItem('krait-sync-on', $('sync-on').checked ? '1' : '0');
+    setSyncStatus($('sync-on').checked ? 'on' : 'off');
+    if ($('sync-on').checked) cloudQueueSave();
+  };
+  $('sync-refresh').onclick = renderCloudChats;
   cloudRefreshUi();
 }
 function closeKeys() { $('key-screen').classList.remove('show'); }
@@ -2807,7 +2901,7 @@ let termAgentOn = false;
 let termPickOn = false;
 let termConvo = [];
 let termLaunch = null; // { cmd, more, idx, items }
-const TERM_VERSION = '1.9.5';
+const TERM_VERSION = '2.0.0';
 function shortModelId(full) { return String(full || '').split('/').pop() || 'none'; }
 function ollamaModel() {
   const list = (K.modelList || []).filter(m => m.ns === 'ollama');

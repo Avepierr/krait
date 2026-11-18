@@ -131,8 +131,11 @@
       updated_at: new Date().toISOString(),
     };
     if (thread.id) {
-      await call('/rest/v1/threads?id=eq.' + thread.id, { method: 'PATCH', token: t, body });
-      return thread.id;
+      // only claim the save if a row actually belonged to this user (RLS filtered ones return nothing)
+      const upd = await call('/rest/v1/threads?select=id&id=eq.' + encodeURIComponent(thread.id), {
+        method: 'PATCH', token: t, body, prefer: 'return=representation',
+      });
+      if (upd && upd.length) return thread.id;
     }
     const rows = await call('/rest/v1/threads?select=id', {
       method: 'POST', token: t, body, prefer: 'return=representation',

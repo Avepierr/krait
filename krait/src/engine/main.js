@@ -168,7 +168,179 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.env.KRAIT_UI_CHECK) runUiCheck();
   if (process.platform === 'win32') app.setAppUserModelId('krait');
+}
+
+/**
+ * KRAIT_UI_CHECK=1 node_modules/electron/dist/electron .
+ * Drives the real window: probes the v2 pages, screenshots each one into
+ * checks/, records renderer errors and memory, then closes the app itself.
+ * Only runs when the env var is set, so normal launches never touch it.
+ */
+async function runUiCheck() {
+  const fs = require('fs');
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const started = Date.now();
+  const errors = [];
+  const shots = [];
+  const outDir = path.join(__dirname, '..', '..', '..', 'checks');
+  try { fs.mkdirSync(outDir, { recursive: true }); } catch {}
+
+  win.webContents.on('console-message', (...args) => {
+    const ev = args[0];
+    if (ev && typeof ev === 'object' && typeof ev.message === 'string') {
+      const devCsp = ev.message.indexOf('Electron Security Warning (Insecure Content-Security-Policy)') === 0;
+      if (!devCsp && (ev.level === 'error' || ev.level === 'warning')) errors.push('console[' + ev.level + ']: ' + ev.message);
+      return;
+    }
+    const level = args[1], message = args[2];
+    if (level >= 2) errors.push('console: ' + message);
+  });
+  win.webContents.on('render-process-gone', (_, d) => errors.push('renderer gone: ' + d.reason));
+  win.webContents.on('preload-error', (_, p, e) => errors.push('preload: ' + e.message));
+
+  const shot = async name => {
+    try {
+      const img = await win.webContents.capturePage();
+      const file = path.join(outDir, 'ui-' + name + '.png');
+      fs.writeFileSync(file, img.toPNG());
+      shots.push(path.basename(file));
+    } catch (e) { errors.push('screenshot ' + name + ': ' + e.message); }
+  };
+
+  await new Promise(r => win.webContents.once('did-finish-load', r));
+  await sleep(1500); // let init() paint the cached chat and wire settings
+
+  let probe = {};
+  try {
+    probe = await win.webContents.executeJavaScript(`(function () {
+      const ids = ['cloud-box','cloud-form','cloud-signin','cloud-signup','sync-box','sync-on','sync-refresh','sync-list','page-showcase','sc-list','sc-share','sc-refresh','page-admin','ad-reports','ad-users','ad-refresh','nav-admin'];
+      const missing = ids.filter(i => !document.getElementById(i));
+      const fnNames = ['showShowcase','showAdmin','shareCurrentChat','renderCloudChats','openCloudChat','cloudSaveChat','cloudQueueSave'];
+      return {
+        missing: missing,
+        cloudLib: !!(window.KraitCloud && window.KraitCloud.signIn),
+        alreadySignedIn: !!(window.KraitCloud && window.KraitCloud.signedIn()),
+        fns: fnNames.filter(n => typeof window[n] === 'function'),
+        syncHiddenSignedOut: (document.getElementById('sync-box') || {}).style ? document.getElementById('sync-box').style.display === 'none' : null,
+        adminNavHidden: (document.getElementById('nav-admin') || {}).style ? document.getElementById('nav-admin').style.display === 'none' : null,
+      };
+    })()`);
+  } catch (e) { errors.push('probe: ' + e.message); }
+  require('fs').writeFileSync(path.join(outDir, 'ui-probe.json'), JSON.stringify(probe, null, 2));
+
+  await shot('chat-home');
+  await win.webContents.executeJavaScript("showSettings('account')");
+  await sleep(500);
+  await shot('account');
+  await win.webContents.executeJavaScript("showSettingsPage('showcase')");
+  await sleep(700);
+  await shot('showcase');
+  await win.webContents.executeJavaScript("showSettingsPage('admin')");
+  await sleep(500);
+  await shot('admin');
+  await win.webContents.executeJavaScript("showSettingsPage('account'); closeKeys();");
+  await sleep(300);
+
+  const metrics = app.getAppMetrics();
+  const memMB = Math.round(metrics.reduce((a, m) => a + (m.memory ? m.memory.workingSetSize : 0), 0) / 1024);
+  const missing = (probe.missing || []);
+  if (missing.length) errors.push('missing elements: ' + missing.join(', '));
+  if (!probe.cloudLib) errors.push('KraitCloud library not loaded in the page');
+  const needFns = ['showShowcase', 'showAdmin', 'shareCurrentChat', 'openCloudChat', 'cloudSaveChat'];
+  for (const f of needFns) if (!(probe.fns || []).includes(f)) errors.push('missing function: ' + f);
+  if (probe.syncHiddenSignedOut !== true && !probe.alreadySignedIn) errors.push('sync box should be hidden while signed out');
+  if (probe.adminNavHidden !== true && !probe.alreadySignedIn) errors.push('owner nav should be hidden while signed out');
+
+  // optional signed-in pass: set KRAIT_UI_EMAIL + KRAIT_UI_PASS (+ KRAIT_UI_USER)
+  let signedIn = null;
+  if (process.env.KRAIT_UI_EMAIL && process.env.KRAIT_UI_PASS) {
+    const email = process.env.KRAIT_UI_EMAIL;
+    const pass = process.env.KRAIT_UI_PASS;
+    const user = process.env.KRAIT_UI_USER || 'uicheck';
+    try {
+      signedIn = await win.webContents.executeJavaScript(`(async function () {
+        showSettings('account');
+        document.getElementById('cloud-email').value = ${JSON.stringify(email)};
+        document.getElementById('cloud-pass').value = ${JSON.stringify(pass)};
+        document.getElementById('cloud-user').value = ${JSON.stringify(user)};
+        document.getElementById('cloud-signup').click();
+        const t0 = Date.now();
+        while (!window.KraitCloud.signedIn() && Date.now() - t0 < 20000) { await new Promise(r => setTimeout(r, 250)); }
+        if (!window.KraitCloud.signedIn()) {
+          // account may already exist from an earlier run - try signing in instead
+          document.getElementById('cloud-signin').click();
+          const t1 = Date.now();
+          while (!window.KraitCloud.signedIn() && Date.now() - t1 < 20000) { await new Promise(r => setTimeout(r, 250)); }
+        }
+        await new Promise(r => setTimeout(r, 800));
+        const box = document.getElementById('sync-box');
+        const out = {
+          signedIn: window.KraitCloud.signedIn(),
+          syncVisible: !!box && box.style.display !== 'none',
+          syncOn: !!document.getElementById('sync-on').checked,
+          navAdminHidden: document.getElementById('nav-admin').style.display === 'none',
+          whoLine: document.getElementById('cloud-who-line').textContent,
+        };
+        if (out.signedIn) {
+          if (!Array.isArray(K.messages) || !K.messages.length) {
+            const first = document.querySelector('#sessions .session-item');
+            if (first) { first.click(); await new Promise(r => setTimeout(r, 1500)); }
+          }
+          if (!Array.isArray(K.messages) || !K.messages.length) {
+            K.messages = [{ role: 'user', content: 'ui check hello' }, { role: 'assistant', content: 'ui check reply' }];
+            K.cloudThreadId = null;
+            out.seeded = true;
+          }
+          out.messages = K.messages.length;
+          await window.cloudSaveChat();
+          await new Promise(r => setTimeout(r, 600));
+          out.saveStatus = document.getElementById('sync-status').textContent;
+          await window.renderCloudChats();
+          await new Promise(r => setTimeout(r, 800));
+          out.chatRows = document.querySelectorAll('#sync-list .ad-row').length;
+          out.listText = (document.querySelector('#sync-list .ad-row strong') || {}).textContent || '';
+        }
+        return out;
+      })()`);
+    } catch (e) { errors.push('signed-in pass: ' + e.message); }
+    if (signedIn) {
+      if (!signedIn.signedIn) errors.push('signup/signin in the UI failed: ' + (signedIn.whoLine || 'no detail'));
+      if (signedIn.signedIn) {
+        if (!signedIn.syncVisible) errors.push('sync box not visible after sign in');
+        if (!signedIn.syncOn) errors.push('sync toggle should default on');
+        if (!signedIn.saveStatus || signedIn.saveStatus.indexOf('saved') < 0) errors.push('save status did not confirm: ' + signedIn.saveStatus);
+        if (!signedIn.chatRows) errors.push('saved chat list is empty after a save');
+        if (signedIn.navAdminHidden !== true) errors.push('non-owner saw the owner panel nav');
+      }
+    }
+    await shot('account-signed-in');
+    await win.webContents.executeJavaScript('showSettingsPage("account")');
+    try {
+      const stillIn = await win.webContents.executeJavaScript(`(async function () {
+        if (window.KraitCloud.signedIn()) { await window.KraitCloud.signOut(); await window.cloudRefreshUi(); }
+        return window.KraitCloud.signedIn();
+      })()`);
+      if (stillIn) errors.push('sign out left a session behind');
+    } catch (e) { errors.push('sign out: ' + e.message); }
+  }
+
+  const result = {
+    passed: errors.length === 0,
+    startedAt: new Date(started).toISOString(),
+    durationMs: Date.now() - started,
+    errors,
+    screenshots: shots,
+    probe,
+    signedIn,
+    memoryMB: memMB,
+  };
+  const out = path.join(outDir, 'ui-check-' + Date.now() + '.json');
+  fs.writeFileSync(out, JSON.stringify(result, null, 2));
+  console.log('UI CHECK ' + (result.passed ? 'PASSED' : 'FAILED') + ' -> ' + out);
+  if (!result.passed) console.log(errors.join('\n'));
+  setTimeout(() => app.quit(), 400);
 }
 
 // ─── Keys ───
