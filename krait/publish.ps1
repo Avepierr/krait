@@ -17,7 +17,9 @@ $Repo = "$Owner/krait"
 function Api([string]$method, [string]$url, [object]$body, [string]$ct = 'application/json') {
   $headers = @{ Authorization = "token $script:token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'krait-publish' }
   if ($null -ne $body) {
-    Invoke-RestMethod -Method $method -Uri $url -Headers $headers -ContentType $ct -Body ($body | ConvertTo-Json -Depth 6)
+    # send UTF-8 bytes: PS 5.1 otherwise mangles non-ASCII text and GitHub answers "Problems parsing JSON"
+    $json = $body | ConvertTo-Json -Depth 6
+    Invoke-RestMethod -Method $method -Uri $url -Headers $headers -ContentType $ct -Body ([System.Text.Encoding]::UTF8.GetBytes($json))
   } else {
     Invoke-RestMethod -Method $method -Uri $url -Headers $headers
   }
@@ -101,7 +103,7 @@ Write-Output "[6/6] creating release $Tag..."
 # notes come from krait\RELEASE-NOTES.md so every release keeps its own story
 $notesFile = Join-Path $kraitDir 'RELEASE-NOTES.md'
 if (Test-Path $notesFile) {
-  $notes = Get-Content $notesFile -Raw
+  $notes = Get-Content $notesFile -Raw -Encoding UTF8
 } else {
   $notes = "krait $Tag - by Avepier`n`nFree, model-agnostic AI coding agent: desktop app + terminal chat.`n`nDownloads: win-x64 for most PCs, win-ia32 for 32-bit Windows.`n"
 }
@@ -109,10 +111,27 @@ $rel = $null
 try { $rel = Api GET "https://api.github.com/repos/$Repo/releases/tags/$Tag" } catch {}
 if ($rel -and $rel.id) { Write-Output '  release already exists - uploading assets to it' }
 else {
-  $rel = Api POST "https://api.github.com/repos/$Repo/releases" @{ tag_name = $Tag; name = "krait $Tag"; body = $notes; draft = $false; prerelease = $false }
+  # build the JSON by hand: Windows PowerShell's ConvertTo-Json mangles long
+  # multi-line strings (GitHub then answers "Problems parsing JSON")
+  function Esc-Json([string]$s) {
+    return $s.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n').Replace("`t", '\t')
+  }
+  $payload = '{"tag_name":"' + (Esc-Json $Tag) + '","name":"krait ' + (Esc-Json $Tag) +
+    '","body":"' + (Esc-Json $notes) + '","draft":false,"prerelease":false}'
+  $headers = @{ Authorization = "token $token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'krait-publish' }
+  $rel = Invoke-RestMethod -Method POST -Uri "https://api.github.com/repos/$Repo/releases" -Headers $headers `
+    -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($payload))
   Write-Output '  release created'
 }
 $uploadBase = ($rel.upload_url -split '\{')[0]
+# a retry must not hit "already_exists": drop same-named assets first
+$rel = Api GET "https://api.github.com/repos/$Repo/releases/tags/$Tag"
+foreach ($a in $rel.assets) {
+  if ($a.name -like "krait-$version-win-*.zip") {
+    Api DELETE "https://api.github.com/repos/$Repo/releases/assets/$($a.id)" | Out-Null
+    Write-Output "  replaced old asset: $($a.name)"
+  }
+}
 foreach ($zipName in @("krait-$version-win-x64.zip", "krait-$version-win-ia32.zip")) {
   # look in dist\ first, then the Desktop\Krait folder where release copies live
   $zip = Join-Path $distDir $zipName
@@ -120,7 +139,16 @@ foreach ($zipName in @("krait-$version-win-x64.zip", "krait-$version-win-ia32.zi
   if (-not (Test-Path $zip)) { Write-Output "  SKIPPED (not found): $zipName"; continue }
   Write-Output "  uploading $zipName ..."
   $headers = @{ Authorization = "token $token"; 'Content-Type' = 'application/zip'; 'User-Agent' = 'krait-publish' }
-  Invoke-RestMethod -Method Post -Uri "$uploadBase`?name=$zipName" -Headers $headers -InFile $zip | Out-Null
+  $ok = $false
+  for ($try = 1; $try -le 3 -and -not $ok; $try++) {
+    try { $ok = $true; Invoke-RestMethod -Method Post -Uri "$uploadBase`?name=$zipName" -Headers $headers -InFile $zip -TimeoutSec 900 | Out-Null }
+    catch {
+      $ok = $false
+      Write-Output "    attempt $try failed: $($_.Exception.Message)"
+      Start-Sleep -Seconds 5
+    }
+  }
+  if (-not $ok) { throw "upload of $zipName failed after 3 attempts" }
   Write-Output '    done'
 }
 Write-Output ''
